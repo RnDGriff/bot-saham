@@ -11,16 +11,20 @@ from datetime import datetime
 # ==========================================
 # 1. PENGATURAN BOT TELEGRAM (Mendukung GitHub Secrets)
 # ==========================================
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8909829324:AAGEaTwybmbTpRIiws_qOLkPGz0noFSUwwo")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "677263793")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 def kirim_telegram(pesan):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": pesan, "parse_mode": "Markdown"}
     try:
-        requests.post(url, json=payload)
+        respon = requests.post(url, json=payload)
+        if respon.status_code == 200:
+            print("✅ Telegram: Pesan berhasil dikirim!")
+        else:
+            print(f"❌ Telegram Ditolak: {respon.text}")
     except Exception as e:
-        print(f"Gagal mengirim pesan Telegram: {e}")
+        print(f"❌ Gagal koneksi Telegram: {e}")
 
 # ==========================================
 # 2. SISTEM PENGAMBILAN DATA (FIX WIKIPEDIA)
