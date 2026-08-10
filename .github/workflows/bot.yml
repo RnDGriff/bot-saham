@@ -21,7 +21,7 @@ jobs:
     - name: Install Pustaka yang Dibutuhkan
       run: |
         python -m pip install --upgrade pip
-        pip install yfinance pandas numpy requests
+        pip install yfinance pandas numpy requests lxml html5lib
 
     - name: Jalankan Bot Saham
       env:
