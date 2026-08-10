@@ -28,7 +28,7 @@ def kirim_telegram(pesan):
 def dapatkan_watchlist_kompas100():
     print("Memuat daftar saham Kompas 100 dari internet...")
     try:
-        url = 'https://id.wikipedia.org/wiki/Indeks_Kompas_100'
+        url = 'https://id.wikipedia.org/wiki/Indeks_Kompas100'
         header_palsu = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         halaman_web = requests.get(url, headers=header_palsu).text
         
