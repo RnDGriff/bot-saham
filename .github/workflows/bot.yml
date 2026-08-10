@@ -2,29 +2,29 @@ name: Bot Saham Otomatis
 
 on:
   schedule:
-    # 10:00 UTC sama dengan 17:00 WIB (Waktu Indonesia Barat)
-    - cron: '0 10 * * *'
-  workflow_dispatch:
+    - cron: '0 10 * * 1-5'
+  workflow_dispatch: 
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Tarik Kode dari Repository
-        uses: actions/checkout@v4
+    - name: Tarik Kode dari Repository
+      uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
 
-      - name: Install Pustaka yang Dibutuhkan
-        run: |
-          pip install yfinance pandas numpy requests lxml html5lib
+    - name: Install Pustaka yang Dibutuhkan
+      run: |
+        python -m pip install --upgrade pip
+        pip install yfinance pandas numpy requests
 
-      - name: Jalankan Bot Saham
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          python bot_sahamcloud.py
+    - name: Jalankan Bot Saham
+      env:
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      run: python bot_sahamcloud.py
