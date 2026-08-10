@@ -4,6 +4,7 @@ import numpy as np
 import requests
 import time
 import os
+import io
 
 # ==========================================
 # 1. PENGATURAN BOT TELEGRAM
@@ -25,29 +26,32 @@ def kirim_telegram(pesan):
         print(f"Gagal koneksi Telegram: {e}")
 
 # ==========================================
-# 2. SISTEM UPDATE DAFTAR SAHAM (SUMBER WIKIPEDIA VALID)
+# 2. SISTEM UPDATE DAFTAR SAHAM WIKIPEDIA
 # ==========================================
 def dapatkan_seluruh_saham_idx():
     print("Memuat seluruh daftar saham dari Wikipedia...")
     try:
-        # Tautan Wikipedia yang benar dan berisi tabel saham
         url = 'https://id.wikipedia.org/wiki/Daftar_perusahaan_yang_tercatat_di_Bursa_Efek_Indonesia'
-        
         headers = {'User-Agent': 'Mozilla/5.0'}
         req = requests.get(url, headers=headers, timeout=15)
         
-        tabel_wiki = pd.read_html(req.text)
+        tabel_wiki = pd.read_html(io.StringIO(req.text))
         daftar_kode = []
         
         for df in tabel_wiki:
-            for kolom in df.columns:
-                if 'Kode' in str(kolom) or 'Simbol' in str(kolom):
-                    kodes = df[kolom].dropna().astype(str).tolist()
-                    for k in kodes:
-                        k_clean = k.strip()[:4]
-                        if len(k_clean) == 4 and k_clean.isalpha():
-                            daftar_kode.append(f"{k_clean}.JK")
-                    break 
+            # Cari kolom yang memuat kata 'Kode'
+            kolom_kode = [c for c in df.columns if 'Kode' in str(c)]
+            if kolom_kode:
+                nama_kolom = kolom_kode[0]
+                kodes = df[nama_kolom].dropna().astype(str).tolist()
+                
+                for k in kodes:
+                    # Memecah teks "BEI: AALI" menjadi "AALI"
+                    k_clean = k.split(':')[-1].strip()[:4]
+                    
+                    if len(k_clean) == 4 and k_clean.isalpha() and k_clean.isupper():
+                        daftar_kode.append(f"{k_clean}.JK")
+                break 
                     
         daftar_unik = list(set(daftar_kode))
         
@@ -228,7 +232,6 @@ if __name__ == "__main__":
     for i in range(0, total_saham, ukuran_paket):
         paket_saham = daftar_pantauan[i:i+ukuran_paket]
         
-        # 'show_errors=False' sudah dihapus untuk menghindari TypeError
         data_massal = yf.download(paket_saham, period="6mo", group_by='ticker', threads=True)
         
         for kode in paket_saham:
