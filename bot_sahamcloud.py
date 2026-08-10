@@ -179,19 +179,19 @@ def proses_saham(kode_saham, df):
             if (macd_hist > 0) and (obv > obv_ema):
                 sinyal = "🚀 BREAKOUT"
                 alasan = "Tembus resisten 20 hari didukung tren akumulasi OBV & momentum MACD."
-                sl = df['Low'].iloc[-3:].min() * 0.98 # Bawah support 3 hari terakhir
+                sl = df['Low'].iloc[-3:].min() * 0.98 
                 jarak_sl = harga - sl
-                tp1 = harga + (jarak_sl * 1.5) # Rasio dinamis 1:1.5
-                tp2 = harga + (jarak_sl * 2.5) # Rasio dinamis 1:2.5
+                tp1 = harga + (jarak_sl * 1.5) 
+                tp2 = harga + (jarak_sl * 2.5) 
 
         # STRATEGI 2: BUY ON WEAKNESS
         elif (harga > ema50) and (harga <= bb_lower * 1.02):
             if (mfi < 30) and (macd_hist > kemarin['MACD_Hist']):
                 sinyal = "📉 BUY ON WEAKNESS"
                 alasan = "Sentuh batas bawah Bollinger. Indikator uang keluar (MFI) sangat jenuh."
-                sl = bb_lower * 0.98 # Penembusan parah di bawah pita bawah
-                tp1 = ema20 # Pantulan ke area tengah
-                tp2 = ema50 # Pantulan ke tren jangka menengah
+                sl = bb_lower * 0.98 
+                tp1 = ema20 
+                tp2 = ema50 
 
         # STRATEGI 3: BULLISH DIVERGENCE
         elif (harga < ema20):
@@ -202,7 +202,7 @@ def proses_saham(kode_saham, df):
             if (low_baru < low_lama) and ((rsi_baru > rsi_lama + 5) and (macd_baru > macd_lama)) and (hari_ini['Close'] > hari_ini['Open']):
                 sinyal = "👀 BULLISH DIVERGENCE"
                 alasan = "Harga mencetak terendah baru, tetapi momentum RSI & MACD menanjak."
-                sl = low_baru * 0.98 # Batas bawah titik low baru terbentuk
+                sl = low_baru * 0.98 
                 tp1 = ema20
                 tp2 = bb_upper
 
@@ -211,13 +211,12 @@ def proses_saham(kode_saham, df):
             if ((harga > hari_ini['Open']) and (harga > kemarin['High'])) and (mfi < 40) and ((obv > kemarin['OBV']) and (volume > vol_ma)):
                 sinyal = "🔥 CONFIRM REVERSAL"
                 alasan = "Struktur candle kuat membalik tren, diiringi uang masuk (OBV naik)."
-                sl = hari_ini['Low'] * 0.98 # Di bawah ekor candle engulfing
+                sl = hari_ini['Low'] * 0.98 
                 jarak_sl = harga - sl
                 tp1 = harga + (jarak_sl * 1.5)
                 tp2 = harga + (jarak_sl * 2.5)
 
         if sinyal:
-            # Perhitungan matematis persentase risiko ke titik dinamis
             pct_sl = ((harga - sl) / harga) * 100
             pct_tp1 = ((tp1 - harga) / harga) * 100
             pct_tp2 = ((tp2 - harga) / harga) * 100
@@ -237,7 +236,9 @@ def proses_saham(kode_saham, df):
                 f"• Likuiditas: Rp {turnover_miliar:.1f} M/hari\n"
                 f"• OBV Trend: {'Naik (Akumulasi)' if obv > obv_ema else 'Turun'}\n"
                 f"• MFI: {mfi:.1f} | RSI: {rsi:.1f}\n\n"
-                f"📰 [Cek Stockbit]({f'https://stockbit.com/symbol/{emiten}'})"
+                f"📰 **CEK BERITA & SENTIMEN:**\n"
+                f"• [Google News](https://www.google.com/search?tbm=nws&q=saham+{emiten})\n"
+                f"• [Stockbit Stream](https://stockbit.com/symbol/{emiten})"
             )
             kirim_telegram(pesan)
             
