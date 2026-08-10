@@ -4,7 +4,7 @@ import numpy as np
 import requests
 import time
 import os
-import io
+from datetime import datetime, timedelta
 
 # ==========================================
 # 1. PENGATURAN BOT TELEGRAM
@@ -14,59 +14,105 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 def kirim_telegram(pesan):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID, 
-        "text": pesan, 
-        "parse_mode": "Markdown",
-        "disable_web_page_preview": True
-    }
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": pesan, "parse_mode": "Markdown", "disable_web_page_preview": True}
     try:
         requests.post(url, json=payload, timeout=10)
-    except Exception as e:
-        print(f"Gagal koneksi Telegram: {e}")
+    except Exception:
+        pass
 
 # ==========================================
-# 2. SISTEM UPDATE DAFTAR SAHAM WIKIPEDIA
+# 2. SISTEM EVALUASI SINYAL (TP / SL TERCAPAI)
+# ==========================================
+def evaluasi_sinyal_lama():
+    if not os.path.exists('riwayat_sinyal.csv'): return
+    
+    df_riwayat = pd.read_csv('riwayat_sinyal.csv')
+    if df_riwayat.empty: return
+    
+    rekap = []
+    sisa = []
+    
+    print("Mengevaluasi sinyal aktif hari sebelumnya...")
+    for _, row in df_riwayat.iterrows():
+        kode = row['Kode']
+        sl = float(row['SL'])
+        tp1 = float(row['TP1'])
+        
+        try:
+            df = yf.download(kode, period="5d", threads=False)
+            df = df.dropna(how='all')
+            if df.empty:
+                sisa.append(row)
+                continue
+            
+            tertinggi = float(df['High'].iloc[-1])
+            terendah = float(df['Low'].iloc[-1])
+            
+            # Cek apakah terkena SL atau TP hari ini
+            if terendah <= sl:
+                kirim_telegram(f"❌ **STOP LOSS (SL) TERSENTUH**\nSaham: {kode.replace('.JK','')}\nMenyentuh batas risiko: Rp {sl:,.0f}.")
+                row['Hasil'] = 'LOSS'
+                rekap.append(row)
+            elif tertinggi >= tp1:
+                kirim_telegram(f"✅ **TAKE PROFIT (TP) TERCAPAI**\nSaham: {kode.replace('.JK','')}\nBerhasil menyentuh target: Rp {tp1:,.0f}.")
+                row['Hasil'] = 'WIN'
+                rekap.append(row)
+            else:
+                sisa.append(row)
+        except Exception:
+            sisa.append(row)
+            
+        time.sleep(1)
+        
+    pd.DataFrame(sisa).to_csv('riwayat_sinyal.csv', index=False)
+    
+    if rekap:
+        df_rekap = pd.DataFrame(rekap)
+        if os.path.exists('rekap_bulanan.csv'):
+            df_lama = pd.read_csv('rekap_bulanan.csv')
+            pd.concat([df_lama, df_rekap]).to_csv('rekap_bulanan.csv', index=False)
+        else:
+            df_rekap.to_csv('rekap_bulanan.csv', index=False)
+
+# ==========================================
+# 3. SISTEM REKAP WIN RATE AKHIR BULAN
+# ==========================================
+def cek_akhir_bulan():
+    besok = datetime.now() + timedelta(days=1)
+    hari_ini = datetime.now()
+    
+    # Jika besok memasuki bulan baru, maka hari ini adalah hari transaksi terakhir
+    if besok.month != hari_ini.month:
+        if os.path.exists('rekap_bulanan.csv'):
+            df = pd.read_csv('rekap_bulanan.csv')
+            if not df.empty:
+                total = len(df)
+                win = len(df[df['Hasil'] == 'WIN'])
+                loss = len(df[df['Hasil'] == 'LOSS'])
+                win_rate = (win / total) * 100 if total > 0 else 0
+                
+                pesan = f"📊 **REKAP WIN RATE BULAN INI**\n\nTotal Sinyal Dieksekusi: {total}\n✅ Menang (Cetak TP): {win}\n❌ Kalah (Kena SL): {loss}\n\n🏆 **Tingkat Kemenangan: {win_rate:.1f}%**"
+                kirim_telegram(pesan)
+            
+            os.remove('rekap_bulanan.csv')
+
+# ==========================================
+# 4. MEMBACA DAFTAR SAHAM DARI FILE LOKAL
 # ==========================================
 def dapatkan_seluruh_saham_idx():
-    print("Memuat seluruh daftar saham dari Wikipedia...")
+    print("Memuat daftar saham dari file lokal saham.csv...")
     try:
-        url = 'https://id.wikipedia.org/wiki/Daftar_perusahaan_yang_tercatat_di_Bursa_Efek_Indonesia'
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        req = requests.get(url, headers=headers, timeout=15)
-        
-        tabel_wiki = pd.read_html(io.StringIO(req.text))
-        daftar_kode = []
-        
-        for df in tabel_wiki:
-            # Cari kolom yang memuat kata 'Kode'
-            kolom_kode = [c for c in df.columns if 'Kode' in str(c)]
-            if kolom_kode:
-                nama_kolom = kolom_kode[0]
-                kodes = df[nama_kolom].dropna().astype(str).tolist()
-                
-                for k in kodes:
-                    # Memecah teks "BEI: AALI" menjadi "AALI"
-                    k_clean = k.split(':')[-1].strip()[:4]
-                    
-                    if len(k_clean) == 4 and k_clean.isalpha() and k_clean.isupper():
-                        daftar_kode.append(f"{k_clean}.JK")
-                break 
-                    
-        daftar_unik = list(set(daftar_kode))
-        
-        if len(daftar_unik) > 100:
-            print(f"✅ Berhasil memuat {len(daftar_unik)} saham BEI.")
-            return daftar_unik
-        else:
-            raise ValueError("Tabel gagal dibaca secara penuh.")
-            
+        data = pd.read_csv('saham.csv')
+        daftar_kode = data['Code'].tolist()
+        daftar_bersih = [f"{str(kode).strip()}.JK" for kode in daftar_kode if pd.notna(kode)]
+        print(f"✅ Berhasil memuat {len(daftar_bersih)} saham BEI.")
+        return list(set(daftar_bersih))
     except Exception as e:
-        print(f"❌ Gagal memuat daftar saham: {e}")
-        return ["BBCA.JK", "BMRI.JK", "BBNI.JK", "BBRI.JK", "ASII.JK"] 
+        print(f"❌ Gagal membaca file saham.csv: {e}")
+        return ["BBCA.JK"] 
 
 # ==========================================
-# 3. MESIN INDIKATOR
+# 5. MESIN INDIKATOR
 # ==========================================
 def hitung_indikator(df):
     df['EMA20'] = df['Close'].ewm(span=20, adjust=False).mean()
@@ -75,7 +121,6 @@ def hitung_indikator(df):
     df['STD20'] = df['Close'].rolling(window=20).std()
     df['BB_Upper'] = df['SMA20'] + (df['STD20'] * 2)
     df['BB_Lower'] = df['SMA20'] - (df['STD20'] * 2)
-    
     df['Vol_MA20'] = df['Volume'].rolling(window=20).mean()
     df['Turnover'] = df['Close'] * df['Volume']
     df['Avg_Turnover_20D'] = df['Turnover'].rolling(window=20).mean()
@@ -95,19 +140,16 @@ def hitung_indikator(df):
     typical_price = (df['High'] + df['Low'] + df['Close']) / 3
     raw_money_flow = typical_price * df['Volume']
     delta_tp = typical_price.diff()
-    positive_flow = raw_money_flow.where(delta_tp > 0, 0).rolling(window=14).sum()
-    negative_flow = raw_money_flow.where(delta_tp < 0, 0).rolling(window=14).sum()
-    mfr = positive_flow / negative_flow
+    mfr = raw_money_flow.where(delta_tp > 0, 0).rolling(window=14).sum() / raw_money_flow.where(delta_tp < 0, 0).rolling(window=14).sum()
     df['MFI'] = 100 - (100 / (1 + mfr))
     
     arah_harga = np.sign(df['Close'].diff())
     df['OBV'] = (arah_harga * df['Volume']).fillna(0).cumsum()
     df['OBV_EMA20'] = df['OBV'].ewm(span=20, adjust=False).mean()
-    
     return df
 
 # ==========================================
-# 4. LOGIKA 4 STRATEGI ANALISIS
+# 6. LOGIKA STRATEGI
 # ==========================================
 def proses_saham(kode_saham, df):
     try:
@@ -118,20 +160,24 @@ def proses_saham(kode_saham, df):
         kemarin = df.iloc[-2]
         
         harga = hari_ini['Close']
-        if harga < 55: return 
+        if harga < 50: return # Batas Harga Diubah 50
         rata_rata_turnover = hari_ini['Avg_Turnover_20D']
         if rata_rata_turnover < 5_000_000_000: return 
 
-        ema20, ema50 = hari_ini['EMA20'], hari_ini['EMA50']
         volume, vol_ma = hari_ini['Volume'], hari_ini['Vol_MA20']
         rsi, mfi = hari_ini['RSI'], hari_ini['MFI']
+        ema20, ema50 = hari_ini['EMA20'], hari_ini['EMA50']
         macd_hist = hari_ini['MACD_Hist']
         obv, obv_ema = hari_ini['OBV'], hari_ini['OBV_EMA20']
         bb_upper, bb_lower = hari_ini['BB_Upper'], hari_ini['BB_Lower']
         
         sinyal = None
         alasan = ""
-        sl = tp1 = tp2 = 0
+        
+        # PERBAIKAN MATEMATIS RISK/REWARD RUMUS BAKU
+        sl = harga * 0.95
+        tp1 = harga * 1.05
+        tp2 = harga * 1.10
 
         # STRATEGI 1: BREAKOUT
         tertinggi_20h = df['High'].iloc[-21:-1].max()
@@ -139,115 +185,86 @@ def proses_saham(kode_saham, df):
             if (macd_hist > 0) and (obv > obv_ema):
                 sinyal = "🚀 BREAKOUT"
                 alasan = "Tembus resisten 20 hari didukung tren akumulasi OBV & momentum MACD."
-                sl = hari_ini['Low'] * 0.96
-                tp1 = harga * 1.05
-                tp2 = harga * 1.12
 
         # STRATEGI 2: BUY ON WEAKNESS
         elif (harga > ema50) and (harga <= bb_lower * 1.02):
             if (mfi < 30) and (macd_hist > kemarin['MACD_Hist']):
                 sinyal = "📉 BUY ON WEAKNESS"
                 alasan = "Sentuh batas bawah Bollinger. Indikator uang keluar (MFI) sangat jenuh."
-                sl = bb_lower * 0.98
-                tp1 = ema20 
-                tp2 = bb_upper
 
         # STRATEGI 3: BULLISH DIVERGENCE
         elif (harga < ema20):
-            low_baru = df['Low'].iloc[-5:].min()
-            low_lama = df['Low'].iloc[-15:-5].min()
-            rsi_baru = df['RSI'].iloc[-5:].min()
-            rsi_lama = df['RSI'].iloc[-15:-5].min()
-            macd_baru = df['MACD_Hist'].iloc[-5:].min()
-            macd_lama = df['MACD_Hist'].iloc[-15:-5].min()
+            low_baru, low_lama = df['Low'].iloc[-5:].min(), df['Low'].iloc[-15:-5].min()
+            rsi_baru, rsi_lama = df['RSI'].iloc[-5:].min(), df['RSI'].iloc[-15:-5].min()
+            macd_baru, macd_lama = df['MACD_Hist'].iloc[-5:].min(), df['MACD_Hist'].iloc[-15:-5].min()
             
-            harga_turun = low_baru < low_lama
-            momentum_naik = (rsi_baru > rsi_lama + 5) and (macd_baru > macd_lama)
-            candle_hijau = hari_ini['Close'] > hari_ini['Open']
-            
-            if harga_turun and momentum_naik and candle_hijau:
+            if (low_baru < low_lama) and ((rsi_baru > rsi_lama + 5) and (macd_baru > macd_lama)) and (hari_ini['Close'] > hari_ini['Open']):
                 sinyal = "👀 BULLISH DIVERGENCE"
                 alasan = "Harga mencetak terendah baru, tetapi momentum RSI & MACD menanjak."
-                sl = low_baru * 0.97
-                tp1 = ema20
-                tp2 = ema50
 
         # STRATEGI 4: REVERSAL
         elif (harga < ema50):
-            engulfing = (harga > hari_ini['Open']) and (harga > kemarin['High'])
-            obv_divergence = (obv > kemarin['OBV']) and (volume > vol_ma)
-            
-            if engulfing and (mfi < 40) and obv_divergence:
+            if ((harga > hari_ini['Open']) and (harga > kemarin['High'])) and (mfi < 40) and ((obv > kemarin['OBV']) and (volume > vol_ma)):
                 sinyal = "🔥 CONFIRM REVERSAL"
                 alasan = "Struktur candle kuat membalik tren, diiringi uang masuk (OBV naik)."
-                sl = hari_ini['Low'] * 0.98
-                jarak_sl = harga - sl
-                if jarak_sl/harga < 0.03: sl = harga * 0.97
-                tp1 = harga + ((harga - sl) * 2)
-                tp2 = harga + ((harga - sl) * 3)
 
         if sinyal:
-            pct_sl = ((harga - sl) / harga) * 100
-            pct_tp1 = ((tp1 - harga) / harga) * 100
-            pct_tp2 = ((tp2 - harga) / harga) * 100
+            emiten = kode_saham.replace('.JK', '')
             turnover_miliar = rata_rata_turnover / 1_000_000_000
             
-            emiten = kode_saham.replace('.JK', '')
-            link_berita = f"https://www.google.com/search?tbm=nws&q=saham+{emiten}"
-            link_stockbit = f"https://stockbit.com/symbol/{emiten}"
-
             pesan = (
                 f"🚨 **{sinyal}** | **{emiten}**\n\n"
                 f"**Info:** {alasan}\n\n"
-                f"📋 **TRADING PLAN**\n"
+                f"📋 **TRADING PLAN (Rasio 1:2)**\n"
                 f"• Entry: Rp {harga:,.0f}\n"
-                f"• SL: Rp {sl:,.0f} (-{pct_sl:.1f}%)\n"
-                f"• TP 1: Rp {tp1:,.0f} (+{pct_tp1:.1f}%)\n"
-                f"• TP 2: Rp {tp2:,.0f} (+{pct_tp2:.1f}%)\n\n"
+                f"• SL: Rp {sl:,.0f} (-5%)\n"
+                f"• TP 1: Rp {tp1:,.0f} (+5%)\n"
+                f"• TP 2: Rp {tp2:,.0f} (+10%)\n\n"
                 f"📊 **SMART MONEY**\n"
                 f"• Likuiditas: Rp {turnover_miliar:.1f} M/hari\n"
                 f"• OBV Trend: {'Naik (Akumulasi)' if obv > obv_ema else 'Turun'}\n"
                 f"• MFI: {mfi:.1f} | RSI: {rsi:.1f}\n\n"
-                f"📰 **CEK BERITA & SENTIMEN:**\n"
-                f"• [Google News]({link_berita})\n"
-                f"• [Stockbit Stream]({link_stockbit})"
+                f"📰 [Cek Stockbit]({f'https://stockbit.com/symbol/{emiten}'})"
             )
             kirim_telegram(pesan)
-            print(f"Sinyal dikirim: {emiten}")
-
+            
+            # Mencatat Sinyal Baru ke Sistem Jurnal
+            baru = pd.DataFrame([{'Tanggal': datetime.now().strftime("%Y-%m-%d"), 'Kode': kode_saham, 'Entry': harga, 'SL': sl, 'TP1': tp1}])
+            if os.path.exists('riwayat_sinyal.csv'):
+                pd.concat([pd.read_csv('riwayat_sinyal.csv'), baru]).to_csv('riwayat_sinyal.csv', index=False)
+            else:
+                baru.to_csv('riwayat_sinyal.csv', index=False)
+                
     except Exception:
         pass 
 
 # ==========================================
-# 5. EKSEKUSI PENGUNDUHAN MASSAL
+# 7. EKSEKUSI UTAMA
 # ==========================================
 if __name__ == "__main__":
-    print("Memulai sistem...")
+    print("Sistem Dimulai.")
+    
+    # Langkah 1 & 2: Cek Jurnal Lama
+    evaluasi_sinyal_lama()
+    cek_akhir_bulan()
+    
+    # Langkah 3: Cari Sinyal Baru
     daftar_pantauan = dapatkan_seluruh_saham_idx()
-    total_saham = len(daftar_pantauan)
+    total = len(daftar_pantauan)
+    print(f"Mulai menyaring {total} saham...")
     
-    print(f"Total saham: {total_saham}. Memulai unduhan massal bergelombang...")
-    
-    ukuran_paket = 100
-    for i in range(0, total_saham, ukuran_paket):
-        paket_saham = daftar_pantauan[i:i+ukuran_paket]
+    for i in range(0, total, 100):
+        paket = daftar_pantauan[i:i+100]
+        data_massal = yf.download(paket, period="6mo", group_by='ticker', threads=True)
         
-        data_massal = yf.download(paket_saham, period="6mo", group_by='ticker', threads=True)
-        
-        for kode in paket_saham:
+        for kode in paket:
             try:
-                if len(paket_saham) == 1:
-                    df_saham = data_massal.copy()
-                else:
-                    df_saham = data_massal[kode].copy()
-                
+                df_saham = data_massal.copy() if len(paket) == 1 else data_massal[kode].copy()
                 df_saham = df_saham.dropna(how='all')
-                
                 if not df_saham.empty:
                     proses_saham(kode, df_saham)
             except Exception:
                 continue
-                
         time.sleep(3)
         
-    print("Pemindaian seluruh saham selesai.")
+    print("Selesai.")
