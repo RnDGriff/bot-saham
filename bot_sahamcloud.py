@@ -25,29 +25,40 @@ def kirim_telegram(pesan):
         print(f"Gagal koneksi Telegram: {e}")
 
 # ==========================================
-# 2. SISTEM UPDATE DAFTAR SAHAM BEI OTOMATIS
+# 2. SISTEM UPDATE DAFTAR SAHAM (SUMBER WIKIPEDIA VALID)
 # ==========================================
 def dapatkan_seluruh_saham_idx():
-    print("Memuat seluruh daftar saham langsung dari server resmi BEI...")
+    print("Memuat seluruh daftar saham dari Wikipedia...")
     try:
-        url = 'https://idx.co.id/primary/MasterData/GetCompany'
+        # Tautan Wikipedia yang benar dan berisi tabel saham
+        url = 'https://id.wikipedia.org/wiki/Daftar_perusahaan_yang_tercatat_di_Bursa_Efek_Indonesia'
         
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Referer': 'https://www.idx.co.id/',
-            'Accept': 'application/json'
-        }
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        req = requests.get(url, headers=headers, timeout=15)
         
-        respons = requests.get(url, headers=headers, timeout=10)
-        data = respons.json()
+        tabel_wiki = pd.read_html(req.text)
+        daftar_kode = []
         
-        daftar_bersih = [f"{emiten['TickerCode']}.JK" for emiten in data.get('data', []) if emiten.get('TickerCode')]
+        for df in tabel_wiki:
+            for kolom in df.columns:
+                if 'Kode' in str(kolom) or 'Simbol' in str(kolom):
+                    kodes = df[kolom].dropna().astype(str).tolist()
+                    for k in kodes:
+                        k_clean = k.strip()[:4]
+                        if len(k_clean) == 4 and k_clean.isalpha():
+                            daftar_kode.append(f"{k_clean}.JK")
+                    break 
+                    
+        daftar_unik = list(set(daftar_kode))
         
-        print(f"✅ Berhasil memuat {len(daftar_bersih)} saham BEI.")
-        return list(set(daftar_bersih))
+        if len(daftar_unik) > 100:
+            print(f"✅ Berhasil memuat {len(daftar_unik)} saham BEI.")
+            return daftar_unik
+        else:
+            raise ValueError("Tabel gagal dibaca secara penuh.")
             
     except Exception as e:
-        print(f"❌ Gagal memuat daftar saham dari BEI: {e}")
+        print(f"❌ Gagal memuat daftar saham: {e}")
         return ["BBCA.JK", "BMRI.JK", "BBNI.JK", "BBRI.JK", "ASII.JK"] 
 
 # ==========================================
@@ -217,7 +228,8 @@ if __name__ == "__main__":
     for i in range(0, total_saham, ukuran_paket):
         paket_saham = daftar_pantauan[i:i+ukuran_paket]
         
-        data_massal = yf.download(paket_saham, period="6mo", group_by='ticker', threads=True, show_errors=False)
+        # 'show_errors=False' sudah dihapus untuk menghindari TypeError
+        data_massal = yf.download(paket_saham, period="6mo", group_by='ticker', threads=True)
         
         for kode in paket_saham:
             try:
@@ -233,7 +245,6 @@ if __name__ == "__main__":
             except Exception:
                 continue
                 
-        # Jeda 3 detik agar aman dari pemblokiran server
         time.sleep(3)
         
     print("Pemindaian seluruh saham selesai.")
