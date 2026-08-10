@@ -3,79 +3,55 @@ import pandas as pd
 import numpy as np
 import requests
 import time
-import io
 import os
-import re
-from datetime import datetime
 
 # ==========================================
-# 1. PENGATURAN BOT TELEGRAM (Mendukung GitHub Secrets)
+# 1. PENGATURAN BOT TELEGRAM
 # ==========================================
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-# TAMBAHKAN BARIS INI UNTUK MENGECEK APAKAH RAHASIA TERBACA
-print(f"DEBUG TOKEN: {str(TELEGRAM_BOT_TOKEN)[:5]}... | DEBUG CHAT_ID: {TELEGRAM_CHAT_ID}")
-
 def kirim_telegram(pesan):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": pesan, "parse_mode": "Markdown"}
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID, 
+        "text": pesan, 
+        "parse_mode": "Markdown",
+        "disable_web_page_preview": True
+    }
     try:
-        respon = requests.post(url, json=payload)
-        if respon.status_code == 200:
-            print("✅ Telegram: Pesan berhasil dikirim!")
-        else:
-            print(f"❌ Telegram Ditolak: {respon.text}")
+        requests.post(url, json=payload, timeout=10)
     except Exception as e:
-        print(f"❌ Gagal koneksi Telegram: {e}")
+        print(f"Gagal koneksi Telegram: {e}")
 
 # ==========================================
-# 2. SISTEM PENGAMBILAN DATA (FIX WIKIPEDIA)
+# 2. SISTEM UPDATE DAFTAR SAHAM BEI OTOMATIS
 # ==========================================
-def dapatkan_watchlist_kompas100():
-    print("Memuat daftar saham Kompas 100 dari internet...")
+def dapatkan_seluruh_saham_idx():
+    print("Memuat seluruh daftar saham langsung dari server resmi BEI...")
     try:
-        url = 'https://id.wikipedia.org/wiki/Indeks_Kompas100'
-        header_palsu = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        halaman_web = requests.get(url, headers=header_palsu).text
+        url = 'https://idx.co.id/primary/MasterData/GetCompany'
         
-        tabel_semua = pd.read_html(io.StringIO(halaman_web))
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': 'https://www.idx.co.id/',
+            'Accept': 'application/json'
+        }
         
-        daftar_kode = []
-        for tabel in tabel_semua:
-            kolom_kode = next((col for col in tabel.columns if 'Kode' in str(col) or 'Ticker' in str(col)), None)
-            if kolom_kode:
-                daftar_kode = tabel[kolom_kode].tolist()
-                break
-                
-        if daftar_kode:
-            daftar_bersih = []
-            for kode in daftar_kode:
-                if pd.notna(kode):
-                    # Membersihkan teks agar hanya mengambil huruf kapital/angka (Contoh: BEI: AALI -> AALI)
-                    match = re.findall(r'[A-Z0-9]+', str(kode).upper())
-                    if match:
-                        # Ambil bagian string terpanjang yang murni huruf/angka
-                        ticker = max(match, key=len)
-                        if len(ticker) >= 4 and ticker != "KODE":
-                            daftar_bersih.append(f"{ticker}.JK")
-                            
-            daftar_bersih = list(set(daftar_bersih))
-            print(f"✅ Berhasil memuat {len(daftar_bersih)} saham.")
-            return daftar_bersih
-        else:
-            raise ValueError("Tidak menemukan kolom 'Kode'.")
+        respons = requests.get(url, headers=headers, timeout=10)
+        data = respons.json()
+        
+        daftar_bersih = [f"{emiten['TickerCode']}.JK" for emiten in data.get('data', []) if emiten.get('TickerCode')]
+        
+        print(f"✅ Berhasil memuat {len(daftar_bersih)} saham BEI.")
+        return list(set(daftar_bersih))
             
     except Exception as e:
-        print(f"❌ Gagal memuat Wikipedia: {e}")
-        return [
-            "BBCA.JK", "BMRI.JK", "BBNI.JK", "BBRI.JK", "BRIS.JK", 
-            "ASII.JK", "TLKM.JK", "ANTM.JK", "PGEO.JK", "GOTO.JK", 
-            "AMMN.JK", "BREN.JK", "CUAN.JK", "BRPT.JK", "TPIA.JK"
-        ]
+        print(f"❌ Gagal memuat daftar saham dari BEI: {e}")
+        return ["BBCA.JK", "BMRI.JK", "BBNI.JK", "BBRI.JK", "ASII.JK"] 
 
 # ==========================================
-# 3. MESIN INDIKATOR & SMART MONEY
+# 3. MESIN INDIKATOR
 # ==========================================
 def hitung_indikator(df):
     df['EMA20'] = df['Close'].ewm(span=20, adjust=False).mean()
@@ -118,10 +94,8 @@ def hitung_indikator(df):
 # ==========================================
 # 4. LOGIKA 4 STRATEGI ANALISIS
 # ==========================================
-def proses_saham(kode_saham):
+def proses_saham(kode_saham, df):
     try:
-        saham = yf.Ticker(kode_saham)
-        df = saham.history(period="6mo")
         if len(df) < 60: return
         
         df = hitung_indikator(df)
@@ -129,7 +103,7 @@ def proses_saham(kode_saham):
         kemarin = df.iloc[-2]
         
         harga = hari_ini['Close']
-        if harga < 100: return 
+        if harga < 55: return 
         rata_rata_turnover = hari_ini['Avg_Turnover_20D']
         if rata_rata_turnover < 5_000_000_000: return 
 
@@ -178,7 +152,7 @@ def proses_saham(kode_saham):
             
             if harga_turun and momentum_naik and candle_hijau:
                 sinyal = "👀 BULLISH DIVERGENCE"
-                alasan = "Harga mencetak terendah baru, tetapi momentum RSI & MACD menanjak (penjual kehabisan tenaga)."
+                alasan = "Harga mencetak terendah baru, tetapi momentum RSI & MACD menanjak."
                 sl = low_baru * 0.97
                 tp1 = ema20
                 tp2 = ema50
@@ -190,7 +164,7 @@ def proses_saham(kode_saham):
             
             if engulfing and (mfi < 40) and obv_divergence:
                 sinyal = "🔥 CONFIRM REVERSAL"
-                alasan = "Struktur candle kuat membalik tren, diiringi uang masuk (OBV naik) dari area bawah."
+                alasan = "Struktur candle kuat membalik tren, diiringi uang masuk (OBV naik)."
                 sl = hari_ini['Low'] * 0.98
                 jarak_sl = harga - sl
                 if jarak_sl/harga < 0.03: sl = harga * 0.97
@@ -202,37 +176,64 @@ def proses_saham(kode_saham):
             pct_tp1 = ((tp1 - harga) / harga) * 100
             pct_tp2 = ((tp2 - harga) / harga) * 100
             turnover_miliar = rata_rata_turnover / 1_000_000_000
+            
+            emiten = kode_saham.replace('.JK', '')
+            link_berita = f"https://www.google.com/search?tbm=nws&q=saham+{emiten}"
+            link_stockbit = f"https://stockbit.com/symbol/{emiten}"
 
             pesan = (
-                f"🚨 **{sinyal}** | **{kode_saham.replace('.JK', '')}**\n\n"
+                f"🚨 **{sinyal}** | **{emiten}**\n\n"
                 f"**Info:** {alasan}\n\n"
                 f"📋 **TRADING PLAN**\n"
                 f"• Entry: Rp {harga:,.0f}\n"
                 f"• SL: Rp {sl:,.0f} (-{pct_sl:.1f}%)\n"
                 f"• TP 1: Rp {tp1:,.0f} (+{pct_tp1:.1f}%)\n"
                 f"• TP 2: Rp {tp2:,.0f} (+{pct_tp2:.1f}%)\n\n"
-                f"📊 **INDIKATOR SMART MONEY**\n"
+                f"📊 **SMART MONEY**\n"
                 f"• Likuiditas: Rp {turnover_miliar:.1f} M/hari\n"
                 f"• OBV Trend: {'Naik (Akumulasi)' if obv > obv_ema else 'Turun'}\n"
-                f"• MFI (Money Flow): {mfi:.1f}\n"
-                f"• RSI: {rsi:.1f}"
+                f"• MFI: {mfi:.1f} | RSI: {rsi:.1f}\n\n"
+                f"📰 **CEK BERITA & SENTIMEN:**\n"
+                f"• [Google News]({link_berita})\n"
+                f"• [Stockbit Stream]({link_stockbit})"
             )
             kirim_telegram(pesan)
-            print(f"Sinyal {sinyal} dikirim untuk emiten: {kode_saham}")
+            print(f"Sinyal dikirim: {emiten}")
 
     except Exception:
         pass 
 
 # ==========================================
-# 5. EKSEKUSI UTAMA (UNTUK GITHUB ACTIONS)
+# 5. EKSEKUSI PENGUNDUHAN MASSAL
 # ==========================================
 if __name__ == "__main__":
-    print("Memulai pemindaian pasar harian...")
-    daftar_pantauan_saham = dapatkan_watchlist_kompas100()
+    print("Memulai sistem...")
+    daftar_pantauan = dapatkan_seluruh_saham_idx()
+    total_saham = len(daftar_pantauan)
     
-    print(f"Total saham dalam pantauan: {len(daftar_pantauan_saham)}. Memulai analisis...")
-    for kode_emiten in daftar_pantauan_saham:
-        proses_saham(kode_emiten)
-        time.sleep(1) # Jeda agar aman dari batasan server Yahoo Finance
+    print(f"Total saham: {total_saham}. Memulai unduhan massal bergelombang...")
+    
+    ukuran_paket = 100
+    for i in range(0, total_saham, ukuran_paket):
+        paket_saham = daftar_pantauan[i:i+ukuran_paket]
         
-    print("Pemindaian selesai.")
+        data_massal = yf.download(paket_saham, period="6mo", group_by='ticker', threads=True, show_errors=False)
+        
+        for kode in paket_saham:
+            try:
+                if len(paket_saham) == 1:
+                    df_saham = data_massal.copy()
+                else:
+                    df_saham = data_massal[kode].copy()
+                
+                df_saham = df_saham.dropna(how='all')
+                
+                if not df_saham.empty:
+                    proses_saham(kode, df_saham)
+            except Exception:
+                continue
+                
+        # Jeda 3 detik agar aman dari pemblokiran server
+        time.sleep(3)
+        
+    print("Pemindaian seluruh saham selesai.")
