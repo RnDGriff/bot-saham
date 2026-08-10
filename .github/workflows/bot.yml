@@ -2,8 +2,8 @@ name: Bot Saham Otomatis
 
 on:
   schedule:
-    # 17:15 WIB sama dengan pukul 10:15 UTC. Berjalan Senin - Jumat
-    - cron: '15 10 * * 1-5'
+    # 17:05 WIB sama dengan pukul 10:05 UTC. Berjalan Senin - Jumat
+    - cron: '5 10 * * 1-5'
   workflow_dispatch: 
 
 # WAJIB: Memberikan izin bot untuk menulis dan menyimpan file jurnal
