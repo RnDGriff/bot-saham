@@ -48,13 +48,12 @@ def evaluasi_sinyal_lama():
             tertinggi = float(df['High'].iloc[-1])
             terendah = float(df['Low'].iloc[-1])
             
-            # Cek apakah terkena SL atau TP hari ini
             if terendah <= sl:
-                kirim_telegram(f"❌ **STOP LOSS (SL) TERSENTUH**\nSaham: {kode.replace('.JK','')}\nMenyentuh batas risiko: Rp {sl:,.0f}.")
+                kirim_telegram(f"❌ **STOP LOSS (SL) TERSENTUH**\nSaham: {kode.replace('.JK','')}\nMenyentuh batas risiko struktur: Rp {sl:,.0f}.")
                 row['Hasil'] = 'LOSS'
                 rekap.append(row)
             elif tertinggi >= tp1:
-                kirim_telegram(f"✅ **TAKE PROFIT (TP) TERCAPAI**\nSaham: {kode.replace('.JK','')}\nBerhasil menyentuh target: Rp {tp1:,.0f}.")
+                kirim_telegram(f"✅ **TAKE PROFIT (TP) TERCAPAI**\nSaham: {kode.replace('.JK','')}\nBerhasil menyentuh target grafik: Rp {tp1:,.0f}.")
                 row['Hasil'] = 'WIN'
                 rekap.append(row)
             else:
@@ -81,7 +80,6 @@ def cek_akhir_bulan():
     besok = datetime.now() + timedelta(days=1)
     hari_ini = datetime.now()
     
-    # Jika besok memasuki bulan baru, maka hari ini adalah hari transaksi terakhir
     if besok.month != hari_ini.month:
         if os.path.exists('rekap_bulanan.csv'):
             df = pd.read_csv('rekap_bulanan.csv')
@@ -149,7 +147,7 @@ def hitung_indikator(df):
     return df
 
 # ==========================================
-# 6. LOGIKA STRATEGI
+# 6. LOGIKA STRATEGI (SL DAN TP DINAMIS)
 # ==========================================
 def proses_saham(kode_saham, df):
     try:
@@ -160,7 +158,7 @@ def proses_saham(kode_saham, df):
         kemarin = df.iloc[-2]
         
         harga = hari_ini['Close']
-        if harga < 50: return # Batas Harga Diubah 50
+        if harga < 50: return 
         rata_rata_turnover = hari_ini['Avg_Turnover_20D']
         if rata_rata_turnover < 5_000_000_000: return 
 
@@ -173,11 +171,7 @@ def proses_saham(kode_saham, df):
         
         sinyal = None
         alasan = ""
-        
-        # PERBAIKAN MATEMATIS RISK/REWARD RUMUS BAKU
-        sl = harga * 0.95
-        tp1 = harga * 1.05
-        tp2 = harga * 1.10
+        sl = tp1 = tp2 = 0
 
         # STRATEGI 1: BREAKOUT
         tertinggi_20h = df['High'].iloc[-21:-1].max()
@@ -185,12 +179,19 @@ def proses_saham(kode_saham, df):
             if (macd_hist > 0) and (obv > obv_ema):
                 sinyal = "🚀 BREAKOUT"
                 alasan = "Tembus resisten 20 hari didukung tren akumulasi OBV & momentum MACD."
+                sl = df['Low'].iloc[-3:].min() * 0.98 # Bawah support 3 hari terakhir
+                jarak_sl = harga - sl
+                tp1 = harga + (jarak_sl * 1.5) # Rasio dinamis 1:1.5
+                tp2 = harga + (jarak_sl * 2.5) # Rasio dinamis 1:2.5
 
         # STRATEGI 2: BUY ON WEAKNESS
         elif (harga > ema50) and (harga <= bb_lower * 1.02):
             if (mfi < 30) and (macd_hist > kemarin['MACD_Hist']):
                 sinyal = "📉 BUY ON WEAKNESS"
                 alasan = "Sentuh batas bawah Bollinger. Indikator uang keluar (MFI) sangat jenuh."
+                sl = bb_lower * 0.98 # Penembusan parah di bawah pita bawah
+                tp1 = ema20 # Pantulan ke area tengah
+                tp2 = ema50 # Pantulan ke tren jangka menengah
 
         # STRATEGI 3: BULLISH DIVERGENCE
         elif (harga < ema20):
@@ -201,25 +202,37 @@ def proses_saham(kode_saham, df):
             if (low_baru < low_lama) and ((rsi_baru > rsi_lama + 5) and (macd_baru > macd_lama)) and (hari_ini['Close'] > hari_ini['Open']):
                 sinyal = "👀 BULLISH DIVERGENCE"
                 alasan = "Harga mencetak terendah baru, tetapi momentum RSI & MACD menanjak."
+                sl = low_baru * 0.98 # Batas bawah titik low baru terbentuk
+                tp1 = ema20
+                tp2 = bb_upper
 
         # STRATEGI 4: REVERSAL
         elif (harga < ema50):
             if ((harga > hari_ini['Open']) and (harga > kemarin['High'])) and (mfi < 40) and ((obv > kemarin['OBV']) and (volume > vol_ma)):
                 sinyal = "🔥 CONFIRM REVERSAL"
                 alasan = "Struktur candle kuat membalik tren, diiringi uang masuk (OBV naik)."
+                sl = hari_ini['Low'] * 0.98 # Di bawah ekor candle engulfing
+                jarak_sl = harga - sl
+                tp1 = harga + (jarak_sl * 1.5)
+                tp2 = harga + (jarak_sl * 2.5)
 
         if sinyal:
+            # Perhitungan matematis persentase risiko ke titik dinamis
+            pct_sl = ((harga - sl) / harga) * 100
+            pct_tp1 = ((tp1 - harga) / harga) * 100
+            pct_tp2 = ((tp2 - harga) / harga) * 100
+            
             emiten = kode_saham.replace('.JK', '')
             turnover_miliar = rata_rata_turnover / 1_000_000_000
             
             pesan = (
                 f"🚨 **{sinyal}** | **{emiten}**\n\n"
                 f"**Info:** {alasan}\n\n"
-                f"📋 **TRADING PLAN (Rasio 1:2)**\n"
+                f"📋 **TRADING PLAN DINAMIS (GRAFIK)**\n"
                 f"• Entry: Rp {harga:,.0f}\n"
-                f"• SL: Rp {sl:,.0f} (-5%)\n"
-                f"• TP 1: Rp {tp1:,.0f} (+5%)\n"
-                f"• TP 2: Rp {tp2:,.0f} (+10%)\n\n"
+                f"• SL: Rp {sl:,.0f} (-{pct_sl:.1f}%)\n"
+                f"• TP 1: Rp {tp1:,.0f} (+{pct_tp1:.1f}%)\n"
+                f"• TP 2: Rp {tp2:,.0f} (+{pct_tp2:.1f}%)\n\n"
                 f"📊 **SMART MONEY**\n"
                 f"• Likuiditas: Rp {turnover_miliar:.1f} M/hari\n"
                 f"• OBV Trend: {'Naik (Akumulasi)' if obv > obv_ema else 'Turun'}\n"
@@ -228,7 +241,6 @@ def proses_saham(kode_saham, df):
             )
             kirim_telegram(pesan)
             
-            # Mencatat Sinyal Baru ke Sistem Jurnal
             baru = pd.DataFrame([{'Tanggal': datetime.now().strftime("%Y-%m-%d"), 'Kode': kode_saham, 'Entry': harga, 'SL': sl, 'TP1': tp1}])
             if os.path.exists('riwayat_sinyal.csv'):
                 pd.concat([pd.read_csv('riwayat_sinyal.csv'), baru]).to_csv('riwayat_sinyal.csv', index=False)
@@ -244,11 +256,9 @@ def proses_saham(kode_saham, df):
 if __name__ == "__main__":
     print("Sistem Dimulai.")
     
-    # Langkah 1 & 2: Cek Jurnal Lama
     evaluasi_sinyal_lama()
     cek_akhir_bulan()
     
-    # Langkah 3: Cari Sinyal Baru
     daftar_pantauan = dapatkan_seluruh_saham_idx()
     total = len(daftar_pantauan)
     print(f"Mulai menyaring {total} saham...")
