@@ -5,6 +5,7 @@ import requests
 import time
 import io
 import os
+import re
 from datetime import datetime
 
 # ==========================================
@@ -27,7 +28,7 @@ def kirim_telegram(pesan):
 def dapatkan_watchlist_kompas100():
     print("Memuat daftar saham Kompas 100 dari internet...")
     try:
-        url = 'https://id.wikipedia.org/wiki/Indeks_Kompas100'
+        url = 'https://id.wikipedia.org/wiki/Indeks_Kompas_100'
         header_palsu = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         halaman_web = requests.get(url, headers=header_palsu).text
         
@@ -41,7 +42,18 @@ def dapatkan_watchlist_kompas100():
                 break
                 
         if daftar_kode:
-            daftar_bersih = [f"{str(kode).strip()}.JK" for kode in daftar_kode if pd.notna(kode)]
+            daftar_bersih = []
+            for kode in daftar_kode:
+                if pd.notna(kode):
+                    # Membersihkan teks agar hanya mengambil huruf kapital/angka (Contoh: BEI: AALI -> AALI)
+                    match = re.findall(r'[A-Z0-9]+', str(kode).upper())
+                    if match:
+                        # Ambil bagian string terpanjang yang murni huruf/angka
+                        ticker = max(match, key=len)
+                        if len(ticker) >= 4 and ticker != "KODE":
+                            daftar_bersih.append(f"{ticker}.JK")
+                            
+            daftar_bersih = list(set(daftar_bersih))
             print(f"✅ Berhasil memuat {len(daftar_bersih)} saham.")
             return daftar_bersih
         else:
