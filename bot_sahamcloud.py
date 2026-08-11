@@ -78,7 +78,7 @@ def hitung_indikator(df):
     df['%K'] = df['%K_Raw'].rolling(window=5).mean()
     df['%D'] = df['%K'].rolling(window=5).mean()
     
-    # Mencegah error pembagian 0 jika volume tiba-tiba kosong
+    # Money Flow Index & OBV (Aman dari Volume 0)
     vol_aman = df['Volume'].replace(0, 1) 
     typical_price = (df['High'] + df['Low'] + df['Close']) / 3
     raw_money_flow = typical_price * vol_aman
@@ -86,7 +86,7 @@ def hitung_indikator(df):
     
     uang_masuk = raw_money_flow.where(delta_tp > 0, 0).rolling(window=14).sum()
     uang_keluar = raw_money_flow.where(delta_tp < 0, 0).rolling(window=14).sum()
-    uang_keluar = uang_keluar.replace(0, 1) # Mencegah error
+    uang_keluar = uang_keluar.replace(0, 1) 
     
     mfr = uang_masuk / uang_keluar
     df['MFI'] = 100 - (100 / (1 + mfr))
@@ -102,7 +102,6 @@ def hitung_indikator(df):
 # ==========================================
 def kirim_outlook_ihsg():
     try:
-        # Menggunakan metode khusus agar indeks lebih stabil diunduh
         ihsg = yf.Ticker("^JKSE")
         df = ihsg.history(period="3mo")
         if df.empty or len(df) < 20: return
@@ -110,11 +109,36 @@ def kirim_outlook_ihsg():
         df = hitung_indikator(df)
         hari_ini = df.iloc[-1]
         kemarin = df.iloc[-2]
+        lusa = df.iloc[-3]
         
         harga = hari_ini['Close']
         ema20 = hari_ini['EMA20']
         
-        tren = "🟢 BULLISH (Aman)" if harga > ema20 else "🔴 BEARISH (Hati-hati)"
+        tren = "🟢 BULLISH" if harga > ema20 else "🔴 BEARISH"
+        
+        # Analisis Aksi Harga (IHSG)
+        analisis_harga = ""
+        if hari_ini['Close'] > hari_ini['Open'] and kemarin['Close'] < kemarin['Open'] and hari_ini['Close'] > kemarin['Open'] and hari_ini['Low'] < kemarin['Low']:
+             analisis_harga = "🔥 **Pola Bullish Engulfing**. Daya beli menelan tekanan jual kemarin, potensi kuat pembalikan tren naik."
+        elif hari_ini['Close'] < hari_ini['Open'] and kemarin['Close'] > kemarin['Open'] and hari_ini['Close'] < kemarin['Open'] and hari_ini['High'] > kemarin['High']:
+             analisis_harga = "🩸 **Pola Bearish Engulfing**. Tekanan jual menelan daya beli kemarin, potensi berbalik turun."
+        elif hari_ini['Close'] > kemarin['High']:
+            analisis_harga = "🚀 **Struktur Kuat**. Ditutup di atas nilai tertinggi kemarin. Momentum naik masih berlanjut."
+        elif hari_ini['Close'] < kemarin['Low']:
+            analisis_harga = "⚠️ **Struktur Lemah**. Ditutup di bawah nilai terendah kemarin. Tekanan jual masih berlanjut."
+        elif (hari_ini['High'] <= kemarin['High']) and (hari_ini['Low'] >= kemarin['Low']):
+            analisis_harga = "⚖️ **Fase Konsolidasi (Inside Bar)**. Pasar sedang ragu-ragu menentukan arah (sideways)."
+        else:
+            if harga > kemarin['Close'] and kemarin['Close'] > lusa['Close']:
+                analisis_harga = "📈 **Tren Terjaga**. Menguat 3 hari berturut-turut. Momentum aman."
+            elif harga < kemarin['Close'] and kemarin['Close'] < lusa['Close']:
+                analisis_harga = "📉 **Tren Menurun**. Melemah 3 hari berturut-turut."
+            else:
+                poin = harga - kemarin['Close']
+                if harga > kemarin['Close']:
+                     analisis_harga = f"🟢 **Mencoba Bangkit**. Ditutup lebih tinggi (+{poin:,.0f} poin) dari kemarin."
+                else:
+                     analisis_harga = f"🔴 **Koreksi Wajar**. Ditutup lebih rendah ({poin:,.0f} poin) dari kemarin."
         
         status_macd = cek_status_cross(hari_ini['MACD'], hari_ini['Signal_Line'], kemarin['MACD'], kemarin['Signal_Line'])
         status_stoch = cek_status_cross(hari_ini['%K'], hari_ini['%D'], kemarin['%K'], kemarin['%D'])
@@ -122,12 +146,14 @@ def kirim_outlook_ihsg():
         
         pesan = (
             f"🌐 **OUTLOOK PASAR (IHSG)**\n"
-            f"Posisi: {harga:,.0f} | Tren: {tren}\n\n"
+            f"Posisi: {harga:,.0f} | Tren Utama: {tren}\n\n"
+            f"🕯️ **Aksi Harga (Price Action):**\n"
+            f"{analisis_harga}\n\n"
             f"**Kondisi Indikator:**\n"
             f"• MACD: {status_macd}\n"
             f"• Stoch (10,5,5): {status_stoch}\n"
             f"• RSI (14): {status_rsi} ({hari_ini['RSI']:.1f})\n\n"
-            f"*Sesuaikan porsi trading Anda dengan arah pasar hari ini.*"
+            f"*Sesuaikan porsi trading Anda dengan kondisi pasar hari ini.*"
         )
         kirim_telegram(pesan)
     except Exception as e:
@@ -223,6 +249,7 @@ def proses_saham(kode_saham, df):
         df = hitung_indikator(df)
         hari_ini = df.iloc[-1]
         kemarin = df.iloc[-2]
+        lusa = df.iloc[-3]
         
         harga = hari_ini['Close']
         if harga < 50: return 
@@ -286,6 +313,30 @@ def proses_saham(kode_saham, df):
                 tp2 = resisten if resisten > tp1 else harga + (3.0 * atr)
 
         if sinyal:
+            # Analisis Aksi Harga (Spesifik Saham)
+            analisis_harga = ""
+            if hari_ini['Close'] > hari_ini['Open'] and kemarin['Close'] < kemarin['Open'] and hari_ini['Close'] > kemarin['Open'] and hari_ini['Low'] < kemarin['Low']:
+                 analisis_harga = "Bullish Engulfing. Daya beli menelan tekanan jual kemarin."
+            elif hari_ini['Close'] < hari_ini['Open'] and kemarin['Close'] > kemarin['Open'] and hari_ini['Close'] < kemarin['Open'] and hari_ini['High'] > kemarin['High']:
+                 analisis_harga = "Bearish Engulfing. (Hati-hati, tekanan jual tiba-tiba membesar)."
+            elif hari_ini['Close'] > kemarin['High']:
+                analisis_harga = "Struktur Breakout. Ditutup lebih tinggi dari nilai tertinggi kemarin."
+            elif hari_ini['Close'] < kemarin['Low']:
+                analisis_harga = "Struktur Breakdown. (Hati-hati, ditutup lebih rendah dari support kemarin)."
+            elif (hari_ini['High'] <= kemarin['High']) and (hari_ini['Low'] >= kemarin['Low']):
+                analisis_harga = "Inside Bar. Terjadi penyempitan rentang (konsolidasi)."
+            else:
+                if harga > kemarin['Close'] and kemarin['Close'] > lusa['Close']:
+                    analisis_harga = "Menguat 3 hari beruntun."
+                elif harga < kemarin['Close'] and kemarin['Close'] < lusa['Close']:
+                    analisis_harga = "Melemah 3 hari beruntun."
+                else:
+                    poin = harga - kemarin['Close']
+                    if harga > kemarin['Close']:
+                         analisis_harga = f"Memantul naik (+{poin:,.0f} IDR)."
+                    else:
+                         analisis_harga = f"Koreksi wajar ({poin:,.0f} IDR)."
+
             pct_sl = ((harga - sl) / harga) * 100
             pct_tp1 = ((tp1 - harga) / harga) * 100
             pct_tp2 = ((tp2 - harga) / harga) * 100
@@ -301,6 +352,8 @@ def proses_saham(kode_saham, df):
             pesan = (
                 f"🚨 **{sinyal}** | **{emiten}**\n"
                 f"{alasan}\n\n"
+                f"🕯️ **AKSI HARGA (PRICE ACTION):**\n"
+                f"• {analisis_harga}\n\n"
                 f"📋 **TRADING PLAN**\n"
                 f"• Entry: Rp {harga:,.0f}\n"
                 f"• SL: Rp {sl:,.0f} (-{pct_sl:.1f}%)\n"
