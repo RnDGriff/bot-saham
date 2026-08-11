@@ -34,7 +34,7 @@ def cek_status_cross(garis_cepat_skrg, garis_lambat_skrg, garis_cepat_kmrn, gari
         return "📉 Menurun"
 
 # ==========================================
-# 3. MESIN INDIKATOR
+# 3. MESIN INDIKATOR (DITAMBAH ATR & SUPPORT/RESISTEN)
 # ==========================================
 def hitung_indikator(df):
     df['EMA20'] = df['Close'].ewm(span=20, adjust=False).mean()
@@ -46,6 +46,16 @@ def hitung_indikator(df):
     df['Vol_MA20'] = df['Volume'].rolling(window=20).mean()
     df['Turnover'] = df['Close'] * df['Volume']
     df['Avg_Turnover_20D'] = df['Turnover'].rolling(window=20).mean()
+    
+    # Average True Range (ATR) untuk mengukur volatilitas asli saham
+    df['TR'] = np.maximum(df['High'] - df['Low'], 
+               np.maximum(abs(df['High'] - df['Close'].shift(1)), 
+                          abs(df['Low'] - df['Close'].shift(1))))
+    df['ATR'] = df['TR'].rolling(window=14).mean()
+    
+    # Support dan Resisten Dinamis (20 Hari)
+    df['Support_20'] = df['Low'].rolling(window=20).min()
+    df['Resisten_20'] = df['High'].rolling(window=20).max()
     
     # RSI
     delta = df['Close'].diff()
@@ -68,14 +78,12 @@ def hitung_indikator(df):
     df['%K'] = df['%K_Raw'].rolling(window=5).mean()
     df['%D'] = df['%K'].rolling(window=5).mean()
     
-    # Money Flow Index
+    # Money Flow Index & OBV
     typical_price = (df['High'] + df['Low'] + df['Close']) / 3
     raw_money_flow = typical_price * df['Volume']
     delta_tp = typical_price.diff()
     mfr = raw_money_flow.where(delta_tp > 0, 0).rolling(window=14).sum() / raw_money_flow.where(delta_tp < 0, 0).rolling(window=14).sum()
     df['MFI'] = 100 - (100 / (1 + mfr))
-    
-    # On-Balance Volume
     arah_harga = np.sign(df['Close'].diff())
     df['OBV'] = (arah_harga * df['Volume']).fillna(0).cumsum()
     df['OBV_EMA20'] = df['OBV'].ewm(span=20, adjust=False).mean()
@@ -144,11 +152,11 @@ def evaluasi_sinyal_lama():
             terendah = float(df['Low'].iloc[-1])
             
             if terendah <= sl:
-                kirim_telegram(f"❌ **STOP LOSS (SL)**\nSaham: {kode.replace('.JK','')}\nMenyentuh batas: Rp {sl:,.0f}.")
+                kirim_telegram(f"❌ **STOP LOSS (SL)**\nSaham: {kode.replace('.JK','')}\nMenyentuh batas grafik aktual: Rp {sl:,.0f}.")
                 row['Hasil'] = 'LOSS'
                 rekap.append(row)
             elif tertinggi >= tp1:
-                kirim_telegram(f"✅ **TAKE PROFIT (TP)**\nSaham: {kode.replace('.JK','')}\nMenyentuh target: Rp {tp1:,.0f}.")
+                kirim_telegram(f"✅ **TAKE PROFIT (TP)**\nSaham: {kode.replace('.JK','')}\nMenyentuh target grafik aktual: Rp {tp1:,.0f}.")
                 row['Hasil'] = 'WIN'
                 rekap.append(row)
             else:
@@ -198,7 +206,7 @@ def dapatkan_seluruh_saham_idx():
         return ["BBCA.JK"] 
 
 # ==========================================
-# 8. LOGIKA STRATEGI SAHAM
+# 8. LOGIKA STRATEGI SAHAM (SL/TP GRAFIK MURNI)
 # ==========================================
 def proses_saham(kode_saham, df):
     try:
@@ -220,6 +228,10 @@ def proses_saham(kode_saham, df):
         obv, obv_ema = hari_ini['OBV'], hari_ini['OBV_EMA20']
         mfi = hari_ini['MFI']
         
+        atr = hari_ini['ATR']
+        support = hari_ini['Support_20']
+        resisten = hari_ini['Resisten_20']
+        
         sinyal = None
         alasan = ""
         sl = tp1 = tp2 = 0
@@ -230,19 +242,18 @@ def proses_saham(kode_saham, df):
             if (macd_hist > 0) and (obv > obv_ema):
                 sinyal = "🚀 BREAKOUT"
                 alasan = "Tembus resisten didukung volume kuat."
-                sl = df['Low'].iloc[-3:].min() * 0.98 
-                jarak_sl = harga - sl
-                tp1 = harga + (jarak_sl * 1.5) 
-                tp2 = harga + (jarak_sl * 2.5) 
+                sl = kemarin['Low'] - (0.5 * atr) # Di bawah ayunan lilin sebelumnya
+                tp1 = harga + (1.5 * atr)         # Menyesuaikan volatilitas asli saham
+                tp2 = harga + (3.0 * atr)
 
         # Strategi 2: Buy on Weakness
         elif (harga > ema50) and (harga <= bb_lower * 1.02):
             if (mfi < 30) and (macd_hist > kemarin['MACD_Hist']):
                 sinyal = "📉 BUY ON WEAKNESS"
                 alasan = "Sentuh batas bawah dengan tekanan jual jenuh."
-                sl = bb_lower * 0.98 
-                tp1 = ema20 
-                tp2 = ema50 
+                sl = support - (0.5 * atr)        # Di bawah area support kuat 20 hari
+                tp1 = ema20                       # Kembali ke titik keseimbangan (EMA20)
+                tp2 = resisten                    # Target pantulan ke resisten atas
 
         # Strategi 3: Bullish Divergence
         elif (harga < ema20):
@@ -253,36 +264,26 @@ def proses_saham(kode_saham, df):
             if (low_baru < low_lama) and ((rsi_baru > rsi_lama + 5) and (macd_baru > macd_lama)) and (hari_ini['Close'] > hari_ini['Open']):
                 sinyal = "👀 BULLISH DIVERGENCE"
                 alasan = "Harga turun, tetapi momentum naik."
-                sl = low_baru * 0.98 
+                sl = low_baru - (0.5 * atr)       # Menjaga di bawah dasar titik terendah baru
                 tp1 = ema20
-                tp2 = bb_upper
+                tp2 = resisten
 
         # Strategi 4: Reversal
         elif (harga < ema50):
             if ((harga > hari_ini['Open']) and (harga > kemarin['High'])) and (mfi < 40) and ((obv > kemarin['OBV']) and (volume > vol_ma)):
                 sinyal = "🔥 CONFIRM REVERSAL"
                 alasan = "Lilin pembalikan didukung arus uang masuk."
-                sl = hari_ini['Low'] * 0.98 
-                jarak_sl = harga - sl
-                tp1 = harga + (jarak_sl * 1.5)
-                tp2 = harga + (jarak_sl * 2.5)
+                sl = hari_ini['Low'] - (0.5 * atr) # Murni di bawah ekor lilin hari ini
+                tp1 = ema20 if ema20 > harga else harga + (1.5 * atr)
+                tp2 = resisten if resisten > tp1 else harga + (3.0 * atr)
 
         if sinyal:
-            # PEMBATASAN RISIKO (Maksimal Kerugian 8%)
-            batas_sl_maks = harga * 0.92
-            if sl < batas_sl_maks:
-                sl = batas_sl_maks
-                jarak_sl_baru = harga - sl
-                tp1 = harga + (jarak_sl_baru * 1.5)
-                tp2 = harga + (jarak_sl_baru * 2.5)
-
             pct_sl = ((harga - sl) / harga) * 100
             pct_tp1 = ((tp1 - harga) / harga) * 100
             pct_tp2 = ((tp2 - harga) / harga) * 100
             
             emiten = kode_saham.replace('.JK', '')
             
-            # Status Indikator untuk Saham
             stat_macd = cek_status_cross(hari_ini['MACD'], hari_ini['Signal_Line'], kemarin['MACD'], kemarin['Signal_Line'])
             stat_stoch = cek_status_cross(hari_ini['%K'], hari_ini['%D'], kemarin['%K'], kemarin['%D'])
             stat_rsi = "📈 Menanjak Naik" if hari_ini['RSI'] > kemarin['RSI'] else "📉 Menurun"
@@ -318,7 +319,6 @@ def proses_saham(kode_saham, df):
 if __name__ == "__main__":
     evaluasi_sinyal_lama()
     cek_akhir_bulan()
-    
     kirim_outlook_ihsg()
     
     daftar_pantauan = dapatkan_seluruh_saham_idx()
