@@ -459,7 +459,7 @@ def proses_saham(kode_saham, df, dict_aktif, is_sesi_final):
 # ==========================================
 if __name__ == "__main__":
     waktu_utc = datetime.utcnow()
-    is_sesi_final = True 
+    is_sesi_final = waktu_utc.hour >= 9 
     
     dict_aktif = dapatkan_riwayat_aktif()
     evaluasi_sinyal_lama()
