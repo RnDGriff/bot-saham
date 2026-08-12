@@ -4,7 +4,7 @@ import numpy as np
 import requests
 import time
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # ==========================================
 # 1. PENGATURAN BOT TELEGRAM
@@ -16,12 +16,13 @@ def kirim_telegram(pesan):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": pesan, "parse_mode": "Markdown", "disable_web_page_preview": True}
     try:
-        requests.post(url, json=payload, timeout=10)
-    except Exception:
-        pass
+        response = requests.post(url, json=payload, timeout=10)
+        response.raise_for_status()
+    except Exception as e:
+        print(f"Error mengirim Telegram: {e}")
 
 # ==========================================
-# 2. MESIN INDIKATOR & EMA
+# 2. MESIN INDIKATOR & POLA LILIN
 # ==========================================
 def cek_status_cross(garis_cepat_skrg, garis_lambat_skrg, garis_cepat_kmrn, garis_lambat_kmrn):
     if garis_cepat_kmrn <= garis_lambat_kmrn and garis_cepat_skrg > garis_lambat_skrg:
@@ -45,6 +46,56 @@ def cek_pantulan_ema(c, h, l, c_prev, e20, e50, e200):
         elif h >= ema and c < ema:
             return f"Harga sempat naik namun tertolak turun oleh atap resisten {nama}."
     return ""
+
+def deteksi_pola_candle(hari_ini, kemarin, lusa):
+    O, C, H, L = hari_ini['Open'], hari_ini['Close'], hari_ini['High'], hari_ini['Low']
+    O1, C1 = kemarin['Open'], kemarin['Close']
+    O2, C2 = lusa['Open'], lusa['Close']
+    
+    body = abs(C - O)
+    body1 = abs(C1 - O1)
+    body2 = abs(C2 - O2)
+    upper_shadow = H - max(O, C)
+    lower_shadow = min(O, C) - L
+    
+    pola = []
+    
+    if body <= (C * 0.002): pola.append("Doji (Pasar sedang ragu-ragu)")
+        
+    if body > 0 and (body / (H - L)) > 0.95:
+        if C > O: pola.append("Bullish Marubozu (Dorongan beli sangat kuat)")
+        else: pola.append("Bearish Marubozu (Dorongan jual sangat kuat)")
+        
+    if lower_shadow > (2 * body) and upper_shadow < (0.2 * body):
+        if C > O: pola.append("Bullish Hammer (Potensi pantulan naik)")
+        else: pola.append("Hanging Man (Waspada tekanan jual di pucuk)")
+        
+    if upper_shadow > (2 * body) and lower_shadow < (0.2 * body):
+        if C < O: pola.append("Shooting Star (Potensi tertolak turun)")
+        else: pola.append("Inverted Hammer (Mencoba membalikkan arah naik)")
+        
+    if C1 < O1 and C > O and O > C1 and C < O1 and body < (body1 * 0.5):
+        pola.append("Bullish Harami (Sinyal awal pembalikan naik)")
+    elif C1 > O1 and C < O and O < C1 and C > O1 and body < (body1 * 0.5):
+        pola.append("Bearish Harami (Sinyal awal pelemahan)")
+        
+    if C > O and C1 < O1 and C > O1 and O < C1:
+        pola.append("Bullish Engulfing (Daya beli menelan tekanan jual)")
+    elif C < O and C1 > O1 and C < O1 and O > C1:
+        pola.append("Bearish Engulfing (Tekanan jual menelan daya beli)")
+        
+    midpoint1 = (O1 + C1) / 2
+    if C1 < O1 and C > O and O < C1 and C > midpoint1 and C < O1:
+        pola.append("Piercing Line (Bantingan tertahan, daya beli masuk)")
+    elif C1 > O1 and C < O and O > C1 and C < midpoint1 and C > O1:
+        pola.append("Dark Cloud Cover (Kenaikan tertahan, tekanan jual masuk)")
+        
+    if C2 < O2 and body1 < (body2 * 0.3) and C > O and C > (O2 + C2) / 2:
+        pola.append("Morning Star (Konfirmasi pembalikan arah naik)")
+    elif C2 > O2 and body1 < (body2 * 0.3) and C < O and C < (O2 + C2) / 2:
+        pola.append("Evening Star (Konfirmasi pembalikan arah turun)")
+        
+    return " | ".join(pola) if pola else ""
 
 def hitung_indikator(df):
     df['EMA20'] = df['Close'].ewm(span=20, adjust=False).mean()
@@ -108,13 +159,6 @@ def dapatkan_riwayat_aktif():
     aktif = {}
     if os.path.exists('riwayat_sinyal.csv'):
         df = pd.read_csv('riwayat_sinyal.csv')
-        for col in ['Strategi', 'TP2', 'Pernah_Warning', 'Status_TP']:
-            if col not in df.columns:
-                if col == 'TP2': df[col] = df['TP1'] * 1.05
-                elif col == 'Status_TP': df[col] = ""
-                elif col == 'Pernah_Warning': df[col] = False
-                else: df[col] = ""
-                
         df['Tanggal_DT'] = pd.to_datetime(df['Tanggal'], errors='coerce')
         batas_30 = datetime.now() - timedelta(days=30)
         df_aktif = df[df['Tanggal_DT'] >= batas_30]
@@ -122,11 +166,11 @@ def dapatkan_riwayat_aktif():
         for _, row in df_aktif.iterrows():
             aktif[row['Kode']] = {
                 'Strategi': row['Strategi'],
-                'SL': row['SL'],
-                'TP1': row['TP1'],
-                'TP2': row['TP2'],
-                'Pernah_Warning': row['Pernah_Warning'],
-                'Status_TP': row['Status_TP']
+                'SL': float(row['SL']),
+                'TP1': float(row['TP1']),
+                'TP2': float(row['TP2']),
+                'Pernah_Warning': bool(row['Pernah_Warning']),
+                'Status_TP': str(row.get('Status_TP', ''))
             }
     return aktif
 
@@ -150,11 +194,19 @@ def evaluasi_sinyal_lama():
             else: df[col] = ""
             
     rekap, sisa = [], []
+    batas_30 = datetime.now() - timedelta(days=30)
+    
     for _, row in df.iterrows():
         kode = row['Kode']
         sl, tp1, tp2 = float(row['SL']), float(row['TP1']), float(row['TP2'])
         status_tp = str(row['Status_TP'])
         
+        tanggal_masuk = pd.to_datetime(row['Tanggal'], errors='coerce')
+        if pd.notna(tanggal_masuk) and tanggal_masuk < batas_30:
+            row['Hasil'] = 'EXPIRED'
+            rekap.append(row)
+            continue
+            
         try:
             hist = yf.download(kode, period="5d", threads=False)
             hist = hist.dropna(how='all')
@@ -162,25 +214,28 @@ def evaluasi_sinyal_lama():
                 sisa.append(row)
                 continue
             
-            tertinggi, terendah = float(hist['High'].iloc[-1]), float(hist['Low'].iloc[-1])
+            tertinggi = float(hist['High'].max())
+            terendah = float(hist['Low'].min())
             emiten = kode.replace('.JK','')
             
             if terendah <= sl:
-                kirim_telegram(f"❌ **STOP LOSS (SL)** | **{emiten}**\nMenyentuh batas grafik aktual: Rp {sl:,.0f}. Siklus pantau selesai.")
+                kirim_telegram(f"❌ **STOP LOSS (SL)** | **{emiten}**\nMenyentuh batas aktual: Rp {sl:,.0f}. Siklus pantau selesai.")
                 row['Hasil'] = 'LOSS'
                 rekap.append(row)
             elif tertinggi >= tp2:
-                kirim_telegram(f"🚀 **TAKE PROFIT 2 (TP 2)** | **{emiten}**\nTarget maksimal tercapai: Rp {tp2:,.0f}. Siklus pantau selesai dengan sukses!")
+                kirim_telegram(f"🚀 **TAKE PROFIT 2 (TP 2)** | **{emiten}**\nTarget maksimal tercapai: Rp {tp2:,.0f}. Siklus sukses!")
                 row['Hasil'] = 'WIN'
                 rekap.append(row)
             elif tertinggi >= tp1 and status_tp != 'TP1':
-                kirim_telegram(f"✅ **TAKE PROFIT 1 (TP 1)** | **{emiten}**\nTarget pertama tercapai: Rp {tp1:,.0f}. Sisa porsi ditahan menuju TP 2 (Rp {tp2:,.0f}).")
+                kirim_telegram(f"✅ **TAKE PROFIT 1 (TP 1)** | **{emiten}**\nTarget pertama tercapai: Rp {tp1:,.0f}. Sisa porsi ditahan menuju TP 2.")
                 row['Status_TP'] = 'TP1'
                 sisa.append(row)
             else:
                 sisa.append(row)
-        except Exception:
+        except Exception as e:
+            print(f"Error evaluasi {kode}: {e}")
             sisa.append(row)
+        
         time.sleep(1)
         
     pd.DataFrame(sisa).to_csv('riwayat_sinyal.csv', index=False)
@@ -202,8 +257,12 @@ def cek_akhir_bulan():
                 total = len(df)
                 win = len(df[df['Hasil'] == 'WIN'])
                 loss = len(df[df['Hasil'] == 'LOSS'])
-                win_rate = (win / total) * 100 if total > 0 else 0
-                kirim_telegram(f"📊 **REKAP BULAN INI**\nTotal: {total} | ✅ Win: {win} | ❌ Loss: {loss}\n🏆 **Win Rate: {win_rate:.1f}%**")
+                expired = len(df[df['Hasil'] == 'EXPIRED'])
+                
+                selesai_real = win + loss
+                win_rate = (win / selesai_real) * 100 if selesai_real > 0 else 0
+                
+                kirim_telegram(f"📊 **REKAP BULAN INI**\nTotal Posisi: {total}\n✅ Win: {win} | ❌ Loss: {loss} | ⏳ Expired: {expired}\n🏆 **Win Rate: {win_rate:.1f}%**")
             os.remove('rekap_bulanan.csv')
 
 # ==========================================
@@ -229,26 +288,21 @@ def kirim_outlook_ihsg():
         pct_str = f"{pct:.2f}".replace('.', ',')
         
         analisis_harga = ""
-        if hari_ini['Close'] > hari_ini['Open'] and kemarin['Close'] < kemarin['Open'] and hari_ini['Close'] > kemarin['Open'] and hari_ini['Low'] < kemarin['Low']:
-             analisis_harga = "🔥 **Pola Bullish Engulfing**. Daya beli menelan tekanan jual kemarin, potensi kuat pembalikan tren naik."
-        elif hari_ini['Close'] < hari_ini['Open'] and kemarin['Close'] > kemarin['Open'] and hari_ini['Close'] < kemarin['Open'] and hari_ini['High'] > kemarin['High']:
-             analisis_harga = "🩸 **Pola Bearish Engulfing**. Tekanan jual menelan daya beli kemarin, potensi berbalik turun."
-        elif hari_ini['Close'] > kemarin['High']:
-            analisis_harga = "🚀 **Struktur Kuat**. Ditutup di atas nilai tertinggi kemarin. Momentum naik masih berlanjut."
+        if hari_ini['Close'] > kemarin['High']:
+            analisis_harga = "Struktur Kuat. Ditutup di atas nilai tertinggi kemarin."
         elif hari_ini['Close'] < kemarin['Low']:
-            analisis_harga = "⚠️ **Struktur Lemah**. Ditutup di bawah nilai terendah kemarin. Tekanan jual masih berlanjut."
+            analisis_harga = "Struktur Lemah. Ditutup di bawah nilai terendah kemarin."
         elif (hari_ini['High'] <= kemarin['High']) and (hari_ini['Low'] >= kemarin['Low']):
-            analisis_harga = "⚖️ **Fase Konsolidasi (Inside Bar)**. Pasar sedang ragu-ragu menentukan arah (sideways)."
+            analisis_harga = "Fase Konsolidasi (Inside Bar). Pasar ragu-ragu."
         else:
-            if harga > kemarin['Close'] and kemarin['Close'] > lusa['Close']:
-                analisis_harga = "📈 **Tren Terjaga**. Menguat 3 hari berturut-turut. Momentum aman."
-            elif harga < kemarin['Close'] and kemarin['Close'] < lusa['Close']:
-                analisis_harga = "📉 **Tren Menurun**. Melemah 3 hari berturut-turut."
-            else:
-                analisis_harga = "🟢 **Mencoba Bangkit**." if harga > kemarin['Close'] else "🔴 **Koreksi Wajar**."
-        
+            analisis_harga = "Mencoba bangkit." if harga > kemarin['Close'] else "Koreksi wajar."
+
         pesan_ema = cek_pantulan_ema(harga, hari_ini['High'], hari_ini['Low'], kemarin['Close'], hari_ini['EMA20'], hari_ini['EMA50'], hari_ini['EMA200'])
         if pesan_ema: analisis_harga += f" {pesan_ema}"
+        
+        pola_candle = deteksi_pola_candle(hari_ini, kemarin, lusa)
+        if pola_candle:
+            analisis_harga += f"\n• **Pola Terbentuk:** {pola_candle}"
 
         status_macd = cek_status_cross(hari_ini['MACD'], hari_ini['Signal_Line'], kemarin['MACD'], kemarin['Signal_Line'])
         status_stoch = cek_status_cross(hari_ini['%K'], hari_ini['%D'], kemarin['%K'], kemarin['%D'])
@@ -260,7 +314,7 @@ def kirim_outlook_ihsg():
             f"Posisi: {harga:,.0f} ({simbol}{poin_str} poin / {simbol}{pct_str}%)\n"
             f"Tren Utama: {tren}\n\n"
             f"🕯️ **Aksi Harga (Price Action):**\n"
-            f"{analisis_harga}\n\n"
+            f"• {analisis_harga}\n\n"
             f"**Kondisi Indikator:**\n"
             f"• MACD: {status_macd}\n"
             f"• Stoch (10,5,5): {status_stoch}\n"
@@ -269,8 +323,8 @@ def kirim_outlook_ihsg():
             f"*Sesuaikan porsi trading Anda dengan kondisi pasar hari ini.*"
         )
         kirim_telegram(pesan)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Error Outlook IHSG: {e}")
 
 # ==========================================
 # 5. LOGIKA STRATEGI SAHAM
@@ -280,7 +334,8 @@ def dapatkan_seluruh_saham_idx():
         data = pd.read_csv('saham.csv')
         daftar_kode = data['Code'].tolist()
         return list(set([f"{str(kode).strip()}.JK" for kode in daftar_kode if pd.notna(kode)]))
-    except Exception:
+    except Exception as e:
+        print(f"Error baca saham.csv: {e}")
         return ["BBCA.JK"] 
 
 def proses_saham(kode_saham, df, dict_aktif, is_sesi_final):
@@ -304,24 +359,29 @@ def proses_saham(kode_saham, df, dict_aktif, is_sesi_final):
         apakah_aktif = kode_saham in dict_aktif
         
         # ----------------------------------------------------
-        # CEK PERINGATAN DARURAT (KATALIS MASIF NEGATIF)
+        # CEK PERINGATAN DARURAT (KATALIS NEGATIF)
         # ----------------------------------------------------
         cross_down_ema200 = (harga < ema200) and (kemarin['Close'] >= kemarin['EMA200'])
         cross_down_ema50 = (harga < ema50) and (kemarin['Close'] >= kemarin['EMA50'])
-        distribusi_masif = (volume > vol_ma * 2.5) and (harga < hari_ini['Open'])
         anjlok = (harga <= kemarin['Close'] * 0.93)
-        masif_negatif = cross_down_ema200 or cross_down_ema50 or distribusi_masif or anjlok
+        
+        # 2 Tingkat Volume Jual (Harga ditutup di bawah harga buka)
+        distribusi_masif = (volume >= vol_ma * 2.0) and (harga < hari_ini['Open'])
+        distribusi_signifikan = (volume >= vol_ma * 1.5) and (volume < vol_ma * 2.0) and (harga < hari_ini['Open'])
+        
+        ada_katalis_negatif = cross_down_ema200 or cross_down_ema50 or anjlok or distribusi_masif or distribusi_signifikan
         
         if apakah_aktif:
             rek = dict_aktif[kode_saham]
-            if masif_negatif and not rek['Pernah_Warning']:
+            if ada_katalis_negatif and not rek['Pernah_Warning']:
                 alasan_negatif = []
-                if cross_down_ema200: alasan_negatif.append("Menembus ke bawah garis hidup EMA 200 (Tren Utama Patah)")
-                elif cross_down_ema50: alasan_negatif.append("Menembus ke bawah EMA 50 (Tren Menengah Patah)")
-                if distribusi_masif: alasan_negatif.append("Lonjakan volume jual > 250% (Distribusi Masif)")
+                if cross_down_ema200: alasan_negatif.append("Menembus ke bawah garis hidup EMA 200")
+                elif cross_down_ema50: alasan_negatif.append("Menembus ke bawah EMA 50")
+                if distribusi_masif: alasan_negatif.append("Lonjakan volume jual MASIF (>200%)")
+                elif distribusi_signifikan: alasan_negatif.append("Lonjakan volume jual SIGNIFIKAN (>150%)")
                 if anjlok: alasan_negatif.append(f"Harga anjlok tajam ({(harga-kemarin['Close'])/kemarin['Close']*100:.1f}%)")
                 
-                kirim_telegram(f"⚠️ **PERINGATAN DARURAT** | **{emiten}**\nPergerakan negatif masif:\n• {', '.join(alasan_negatif)}\n\nPerhatikan ketat area SL Anda.")
+                kirim_telegram(f"⚠️ **PERINGATAN DARURAT** | **{emiten}**\nPergerakan negatif:\n• {', '.join(alasan_negatif)}\n\nPerhatikan ketat area SL Anda.")
                 set_pernah_warning(kode_saham)
                 return 
 
@@ -329,8 +389,8 @@ def proses_saham(kode_saham, df, dict_aktif, is_sesi_final):
         # LOGIKA BELI (BUY STRATEGIES)
         # ----------------------------------------------------
         sinyal, alasan, sl, tp1, tp2 = None, "", 0, 0, 0
-        
         tertinggi_20h = df['High'].iloc[-21:-1].max()
+        
         if (harga > tertinggi_20h) and (volume > vol_ma * 1.5) and (harga > ema20):
             if (macd_hist > 0) and (obv > obv_ema):
                 sinyal, alasan = "🚀 BREAKOUT", "Tembus resisten didukung volume kuat."
@@ -355,28 +415,36 @@ def proses_saham(kode_saham, df, dict_aktif, is_sesi_final):
                 sl, tp1, tp2 = hari_ini['Low'] - (0.5 * atr), (ema20 if ema20 > harga else harga + (1.5 * atr)), (resisten if resisten > tp1 else harga + (3.0 * atr))
 
         # ----------------------------------------------------
-        # CEK BLOKIR SPAM & KATALIS MASIF POSITIF
+        # CEK BLOKIR SPAM & KATALIS POSITIF
         # ----------------------------------------------------
         cross_up_ema200 = (harga > ema200) and (kemarin['Close'] <= kemarin['EMA200'])
         cross_up_ema50 = (harga > ema50) and (kemarin['Close'] <= kemarin['EMA50'])
-        akumulasi_masif = (volume > vol_ma * 2.5) and (harga > hari_ini['Open'])
         terbang = (harga >= kemarin['Close'] * 1.07)
-        masif_positif = cross_up_ema200 or cross_up_ema50 or akumulasi_masif or terbang
+        
+        # 2 Tingkat Volume Beli (Harga ditutup di atas harga buka)
+        akumulasi_masif = (volume >= vol_ma * 2.0) and (harga > hari_ini['Open'])
+        akumulasi_signifikan = (volume >= vol_ma * 1.5) and (volume < vol_ma * 2.0) and (harga > hari_ini['Open'])
+        
+        masif_positif = cross_up_ema200 or cross_up_ema50 or terbang or akumulasi_masif
+        signifikan_positif = akumulasi_signifikan
+        ada_katalis_baru = masif_positif or signifikan_positif
 
         if apakah_aktif:
             rek = dict_aktif[kode_saham]
             
-            if masif_positif and not sinyal:
-                sinyal = "🌟 KATALIS POSITIF MASIF"
-                alasan = "Terdeteksi dorongan beli luar biasa di luar pola normal."
+            if ada_katalis_baru and not sinyal:
+                if masif_positif:
+                    sinyal = "🌟 KATALIS POSITIF MASIF"
+                    if akumulasi_masif: alasan = "Terdeteksi dorongan beli MASIF (>200%)."
+                    else: alasan = "Terdeteksi pergerakan positif masif di luar pola normal."
+                elif signifikan_positif:
+                    sinyal = "✨ KATALIS POSITIF SIGNIFIKAN"
+                    alasan = "Terdeteksi peningkatan volume beli SIGNIFIKAN (>150%)."
+                
                 sl, tp1, tp2 = rek['SL'], rek['TP1'], rek['TP2']
 
-            if not is_sesi_final:
-                if not masif_positif and (not sinyal or sinyal == rek['Strategi']):
-                    return 
-            else:
-                if not masif_positif and (not sinyal or sinyal == rek['Strategi']):
-                    return 
+            if not ada_katalis_baru and (not sinyal or sinyal == rek['Strategi']):
+                return 
         else:
             if not is_sesi_final: return 
             if not sinyal: return
@@ -385,27 +453,22 @@ def proses_saham(kode_saham, df, dict_aktif, is_sesi_final):
         # FORMATTING PESAN
         # ----------------------------------------------------
         analisis_harga = ""
-        if hari_ini['Close'] > hari_ini['Open'] and kemarin['Close'] < kemarin['Open'] and hari_ini['Close'] > kemarin['Open'] and hari_ini['Low'] < kemarin['Low']:
-             analisis_harga = "Bullish Engulfing. Daya beli menelan tekanan jual kemarin."
-        elif hari_ini['Close'] < hari_ini['Open'] and kemarin['Close'] > kemarin['Open'] and hari_ini['Close'] < kemarin['Open'] and hari_ini['High'] > kemarin['High']:
-             analisis_harga = "Bearish Engulfing. (Hati-hati, tekanan jual tiba-tiba membesar)."
-        elif hari_ini['Close'] > kemarin['High']:
+        if hari_ini['Close'] > kemarin['High']:
             analisis_harga = "Struktur Breakout. Ditutup lebih tinggi dari nilai tertinggi kemarin."
         elif hari_ini['Close'] < kemarin['Low']:
             analisis_harga = "Struktur Breakdown. (Hati-hati, ditutup lebih rendah dari support kemarin)."
         elif (hari_ini['High'] <= kemarin['High']) and (hari_ini['Low'] >= kemarin['Low']):
             analisis_harga = "Inside Bar. Terjadi penyempitan rentang (konsolidasi)."
         else:
-            if harga > kemarin['Close'] and kemarin['Close'] > lusa['Close']:
-                analisis_harga = "Menguat 3 hari beruntun."
-            elif harga < kemarin['Close'] and kemarin['Close'] < lusa['Close']:
-                analisis_harga = "Melemah 3 hari beruntun."
-            else:
-                poin = harga - kemarin['Close']
-                analisis_harga = f"Memantul naik (+{poin:,.0f} IDR)." if harga > kemarin['Close'] else f"Koreksi wajar ({poin:,.0f} IDR)."
+            poin = harga - kemarin['Close']
+            analisis_harga = f"Memantul naik (+{poin:,.0f} IDR)." if harga > kemarin['Close'] else f"Koreksi wajar ({poin:,.0f} IDR)."
 
         pesan_ema = cek_pantulan_ema(harga, hari_ini['High'], hari_ini['Low'], kemarin['Close'], ema20, ema50, ema200)
         if pesan_ema: analisis_harga += f" {pesan_ema}"
+        
+        pola_candle = deteksi_pola_candle(hari_ini, kemarin, lusa)
+        if pola_candle:
+            analisis_harga += f"\n• **Pola Terbentuk:** {pola_candle}"
 
         turnover_miliar = rata_rata_turnover / 1_000_000_000
         obv_trend = "Naik (Akumulasi)" if obv > obv_ema else "Turun (Distribusi)"
@@ -451,18 +514,18 @@ def proses_saham(kode_saham, df, dict_aktif, is_sesi_final):
         else:
             baru.to_csv('riwayat_sinyal.csv', index=False)
             
-    except Exception:
-        pass 
+    except Exception as e:
+        print(f"Error memproses {kode_saham}: {e}")
 
 # ==========================================
 # 6. EKSEKUSI UTAMA (SISTEM PEMBAGIAN WAKTU)
 # ==========================================
 if __name__ == "__main__":
-    waktu_utc = datetime.utcnow()
+    waktu_utc = datetime.now(timezone.utc)
     is_sesi_final = waktu_utc.hour >= 9 
     
-    dict_aktif = dapatkan_riwayat_aktif()
     evaluasi_sinyal_lama()
+    dict_aktif = dapatkan_riwayat_aktif()
     
     if is_sesi_final:
         cek_akhir_bulan()
@@ -471,16 +534,26 @@ if __name__ == "__main__":
     else:
         daftar_pantauan = list(dict_aktif.keys()) 
     
+    saham_berhasil = 0
     if daftar_pantauan:
         for i in range(0, len(daftar_pantauan), 100):
             paket = daftar_pantauan[i:i+100]
-            data_massal = yf.download(paket, period="1y", group_by='ticker', threads=True)
-            for kode in paket:
-                try:
-                    df_saham = data_massal.copy() if len(paket) == 1 else data_massal[kode].copy()
-                    df_saham = df_saham.dropna(how='all')
-                    if not df_saham.empty:
-                        proses_saham(kode, df_saham, dict_aktif, is_sesi_final)
-                except Exception:
-                    continue
-            time.sleep(3)
+            try:
+                data_massal = yf.download(paket, period="1y", group_by='ticker', threads=True)
+                for kode in paket:
+                    try:
+                        df_saham = data_massal.copy() if len(paket) == 1 else data_massal[kode].copy()
+                        df_saham = df_saham.dropna(how='all')
+                        if not df_saham.empty:
+                            proses_saham(kode, df_saham, dict_aktif, is_sesi_final)
+                            saham_berhasil += 1
+                    except Exception as e:
+                        print(f"Melewati saham {kode}: {e}")
+                        continue
+            except Exception as e:
+                print(f"Error pada proses batch yfinance: {e}")
+                
+            time.sleep(7) 
+            
+    if is_sesi_final and saham_berhasil < 50 and len(daftar_pantauan) > 100:
+        kirim_telegram("⚠️ **SISTEM BOT ALERT**\nJumlah saham yang berhasil dipindai sangat sedikit. Kemungkinan terjadi pemblokiran (Rate-Limit) dari Yahoo Finance pada *server cloud*.")
