@@ -108,7 +108,6 @@ def dapatkan_riwayat_aktif():
     aktif = {}
     if os.path.exists('riwayat_sinyal.csv'):
         df = pd.read_csv('riwayat_sinyal.csv')
-        # Pastikan kolom baru ter-cover untuk migrasi data lama
         for col in ['Strategi', 'TP2', 'Pernah_Warning', 'Status_TP']:
             if col not in df.columns:
                 if col == 'TP2': df[col] = df['TP1'] * 1.05
@@ -166,17 +165,14 @@ def evaluasi_sinyal_lama():
             tertinggi, terendah = float(hist['High'].iloc[-1]), float(hist['Low'].iloc[-1])
             emiten = kode.replace('.JK','')
             
-            # Cek SL
             if terendah <= sl:
                 kirim_telegram(f"❌ **STOP LOSS (SL)** | **{emiten}**\nMenyentuh batas grafik aktual: Rp {sl:,.0f}. Siklus pantau selesai.")
                 row['Hasil'] = 'LOSS'
                 rekap.append(row)
-            # Cek TP 2
             elif tertinggi >= tp2:
                 kirim_telegram(f"🚀 **TAKE PROFIT 2 (TP 2)** | **{emiten}**\nTarget maksimal tercapai: Rp {tp2:,.0f}. Siklus pantau selesai dengan sukses!")
                 row['Hasil'] = 'WIN'
                 rekap.append(row)
-            # Cek TP 1
             elif tertinggi >= tp1 and status_tp != 'TP1':
                 kirim_telegram(f"✅ **TAKE PROFIT 1 (TP 1)** | **{emiten}**\nTarget pertama tercapai: Rp {tp1:,.0f}. Sisa porsi ditahan menuju TP 2 (Rp {tp2:,.0f}).")
                 row['Status_TP'] = 'TP1'
@@ -216,7 +212,7 @@ def cek_akhir_bulan():
 def kirim_outlook_ihsg():
     try:
         ihsg = yf.Ticker("^JKSE")
-        df = ihsg.history(period="1y") # 1y untuk EMA200
+        df = ihsg.history(period="1y") 
         if df.empty or len(df) < 200: return
         df = hitung_indikator(df)
         hari_ini, kemarin, lusa = df.iloc[-1], df.iloc[-2], df.iloc[-3]
@@ -228,6 +224,9 @@ def kirim_outlook_ihsg():
         poin = harga - kemarin['Close']
         pct = (poin / kemarin['Close']) * 100
         simbol = "+" if poin > 0 else ""
+        
+        poin_str = f"{poin:.2f}".replace('.', ',')
+        pct_str = f"{pct:.2f}".replace('.', ',')
         
         analisis_harga = ""
         if hari_ini['Close'] > hari_ini['Open'] and kemarin['Close'] < kemarin['Open'] and hari_ini['Close'] > kemarin['Open'] and hari_ini['Low'] < kemarin['Low']:
@@ -248,7 +247,6 @@ def kirim_outlook_ihsg():
             else:
                 analisis_harga = "🟢 **Mencoba Bangkit**." if harga > kemarin['Close'] else "🔴 **Koreksi Wajar**."
         
-        # Tambahan Pesan EMA
         pesan_ema = cek_pantulan_ema(harga, hari_ini['High'], hari_ini['Low'], kemarin['Close'], hari_ini['EMA20'], hari_ini['EMA50'], hari_ini['EMA200'])
         if pesan_ema: analisis_harga += f" {pesan_ema}"
 
@@ -259,7 +257,7 @@ def kirim_outlook_ihsg():
         
         pesan = (
             f"🌐 **OUTLOOK PASAR (IHSG)**\n"
-            f"Posisi: {harga:,.0f} ({simbol}{poin:,.0f} poin / {simbol}{pct:.2f}%)\n"
+            f"Posisi: {harga:,.0f} ({simbol}{poin_str} poin / {simbol}{pct_str}%)\n"
             f"Tren Utama: {tren}\n\n"
             f"🕯️ **Aksi Harga (Price Action):**\n"
             f"{analisis_harga}\n\n"
@@ -368,23 +366,19 @@ def proses_saham(kode_saham, df, dict_aktif, is_sesi_final):
         if apakah_aktif:
             rek = dict_aktif[kode_saham]
             
-            # Jika ada katalis positif tapi tidak ada sinyal teknikal baru, buat sinyal khusus
             if masif_positif and not sinyal:
                 sinyal = "🌟 KATALIS POSITIF MASIF"
                 alasan = "Terdeteksi dorongan beli luar biasa di luar pola normal."
                 sl, tp1, tp2 = rek['SL'], rek['TP1'], rek['TP2']
 
-            # Filter Mode Waktu
             if not is_sesi_final:
-                # Mode Siang: Hanya boleh lewat jika ada pergerakan masif positif atau pergantian strategi
                 if not masif_positif and (not sinyal or sinyal == rek['Strategi']):
                     return 
             else:
-                # Mode Penutupan: Tahan jika strategi persis sama dan tidak ada dorongan masif
                 if not masif_positif and (not sinyal or sinyal == rek['Strategi']):
                     return 
         else:
-            if not is_sesi_final: return # Saham baru tidak dicari di siang hari
+            if not is_sesi_final: return 
             if not sinyal: return
             
         # ----------------------------------------------------
@@ -410,7 +404,6 @@ def proses_saham(kode_saham, df, dict_aktif, is_sesi_final):
                 poin = harga - kemarin['Close']
                 analisis_harga = f"Memantul naik (+{poin:,.0f} IDR)." if harga > kemarin['Close'] else f"Koreksi wajar ({poin:,.0f} IDR)."
 
-        # Sisipkan Informasi EMA
         pesan_ema = cek_pantulan_ema(harga, hari_ini['High'], hari_ini['Low'], kemarin['Close'], ema20, ema50, ema200)
         if pesan_ema: analisis_harga += f" {pesan_ema}"
 
@@ -466,25 +459,21 @@ def proses_saham(kode_saham, df, dict_aktif, is_sesi_final):
 # ==========================================
 if __name__ == "__main__":
     waktu_utc = datetime.utcnow()
-    # Jam 9 UTC adalah jam 16.00 WIB. Eksekusi 16.47 WIB akan memiliki nilai jam = 9
     is_sesi_final = waktu_utc.hour >= 9 
     
     dict_aktif = dapatkan_riwayat_aktif()
     evaluasi_sinyal_lama()
     
     if is_sesi_final:
-        # MODE FINAL
         cek_akhir_bulan()
         kirim_outlook_ihsg()
         daftar_pantauan = dapatkan_seluruh_saham_idx() 
     else:
-        # MODE INTRADAY
         daftar_pantauan = list(dict_aktif.keys()) 
     
     if daftar_pantauan:
         for i in range(0, len(daftar_pantauan), 100):
             paket = daftar_pantauan[i:i+100]
-            # Harus 1 tahun agar EMA 200 dapat terhitung
             data_massal = yf.download(paket, period="1y", group_by='ticker', threads=True)
             for kode in paket:
                 try:
