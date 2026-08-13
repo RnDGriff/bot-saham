@@ -122,11 +122,12 @@ def hitung_indikator(df):
     df['Signal_Line'] = df['MACD'].ewm(span=9, adjust=False).mean()
     df['MACD_Hist'] = df['MACD'] - df['Signal_Line']
     
+    # Perubahan Stochastic dari 10,5,5 menjadi 10,3,3
     low_10 = df['Low'].rolling(window=10).min()
     high_10 = df['High'].rolling(window=10).max()
     df['%K_Raw'] = 100 * ((df['Close'] - low_10) / (high_10 - low_10))
-    df['%K'] = df['%K_Raw'].rolling(window=5).mean()
-    df['%D'] = df['%K'].rolling(window=5).mean()
+    df['%K'] = df['%K_Raw'].rolling(window=3).mean()
+    df['%D'] = df['%K'].rolling(window=3).mean()
     
     vol_aman = df['Volume'].replace(0, 1) 
     typical_price = (df['High'] + df['Low'] + df['Close']) / 3
@@ -309,7 +310,7 @@ def kirim_outlook_ihsg():
             f"• {analisis_harga}\n\n"
             f"**Kondisi Indikator:**\n"
             f"• MACD: {status_macd}\n"
-            f"• Stoch (10,5,5): {status_stoch}\n"
+            f"• Stoch (10,3,3): {status_stoch}\n"
             f"• RSI (14): {status_rsi} ({hari_ini['RSI']:.1f})\n"
             f"• MFI (14): {status_mfi} ({hari_ini['MFI']:.1f})\n\n"
             f"*Sesuaikan porsi trading Anda dengan kondisi pasar hari ini.*"
@@ -484,7 +485,7 @@ def proses_saham(kode_saham, df, dict_aktif, is_sesi_final):
             f"• Likuiditas: Rp {turnover_miliar:.1f} M/hari\n"
             f"• OBV Trend: {obv_trend}\n"
             f"• MACD: {stat_macd}\n"
-            f"• Stoch (10,5,5): {stat_stoch}\n"
+            f"• Stoch (10,3,3): {stat_stoch}\n"
             f"• RSI (14): {stat_rsi} ({hari_ini['RSI']:.1f})\n"
             f"• MFI (14): {stat_mfi} ({mfi:.1f})\n\n"
             f"📰 **LINK:** [G-News](https://www.google.com/search?tbm=nws&q=saham+{emiten}) | [Stockbit](https://stockbit.com/symbol/{emiten})"
