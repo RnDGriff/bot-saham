@@ -122,7 +122,7 @@ def hitung_indikator(df):
     df['Signal_Line'] = df['MACD'].ewm(span=9, adjust=False).mean()
     df['MACD_Hist'] = df['MACD'] - df['Signal_Line']
     
-    # Perubahan Stochastic dari 10,5,5 menjadi 10,3,3
+    # Stochastic (10,3,3)
     low_10 = df['Low'].rolling(window=10).min()
     high_10 = df['High'].rolling(window=10).max()
     df['%K_Raw'] = 100 * ((df['Close'] - low_10) / (high_10 - low_10))
@@ -195,9 +195,10 @@ def evaluasi_sinyal_lama():
         kode = row['Kode']
         sl, tp1, tp2 = float(row['SL']), float(row['TP1']), float(row['TP2'])
         status_tp = str(row['Status_TP'])
+        tanggal_masuk_str = str(row['Tanggal'])
         
-        tanggal_masuk = pd.to_datetime(row['Tanggal'], errors='coerce')
-        if pd.notna(tanggal_masuk) and tanggal_masuk < batas_30:
+        tanggal_masuk_dt = pd.to_datetime(tanggal_masuk_str, errors='coerce')
+        if pd.notna(tanggal_masuk_dt) and tanggal_masuk_dt < batas_30:
             row['Hasil'] = 'EXPIRED'
             rekap.append(row)
             continue
@@ -209,8 +210,16 @@ def evaluasi_sinyal_lama():
                 sisa.append(row)
                 continue
             
-            tertinggi = float(hist['High'].max())
-            terendah = float(hist['Low'].min())
+            # Memastikan evaluasi hanya menggunakan harga SEJAK tanggal beli, bukan sebelumnya
+            try:
+                hist_valid = hist.loc[tanggal_masuk_str:]
+                if hist_valid.empty:
+                    hist_valid = hist.iloc[-1:] 
+            except:
+                hist_valid = hist.iloc[-1:]
+            
+            tertinggi = float(hist_valid['High'].max())
+            terendah = float(hist_valid['Low'].min())
             emiten = kode.replace('.JK','')
             
             if terendah <= sl:
